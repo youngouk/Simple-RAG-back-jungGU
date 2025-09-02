@@ -303,9 +303,9 @@ class GenerationModule:
             # GPT-5 및 o1 시리즈는 max_completion_tokens 사용
             if 'gpt-5' in model_name.lower() or 'o1' in model_name.lower():
                 generation_config = {
-                    'temperature': config.get('temperature', 0.3),
+                    # GPT-5는 temperature=1 고정, 변경 불가
                     'max_completion_tokens': max_tokens_value,  # GPT-5용 파라미터
-                    'top_p': config.get('top_p', 1.0)
+                    # top_p도 기본값 사용 (지원 여부 불확실)
                 }
                 # GPT-5 추가 파라미터 (선택적)
                 if 'gpt-5' in model_name.lower():
@@ -314,6 +314,8 @@ class GenerationModule:
                     # reasoning_effort 파라미터 추가 (minimal, standard, high)
                     if options.get('reasoning_effort'):
                         generation_config['reasoning_effort'] = options.get('reasoning_effort', 'standard')
+                
+                logger.debug(f"GPT-5 model {model_name} - using fixed temperature=1, custom params removed")
             else:
                 # 레거시 모델 (GPT-4, GPT-3.5 등)
                 generation_config = {
@@ -322,7 +324,7 @@ class GenerationModule:
                     'top_p': config.get('top_p', 1.0)
                 }
             
-            logger.debug(f"OpenAI model {model_name} using config: {generation_config}")
+            logger.debug(f"OpenAI model {model_name} using config: {list(generation_config.keys())}")
             
             # 생성 실행
             response = await asyncio.to_thread(
@@ -348,6 +350,8 @@ class GenerationModule:
                 details = response.usage.completion_tokens_details
                 if hasattr(details, 'reasoning_tokens'):
                     logger.info(f"GPT-5 reasoning tokens used: {details.reasoning_tokens}")
+            
+            logger.info(f"OpenAI {model_name} generation successful - tokens: {tokens_used}")
             
             return GenerationResult(
                 answer=answer,
