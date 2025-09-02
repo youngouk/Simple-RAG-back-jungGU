@@ -220,8 +220,8 @@ async def execute_rag_pipeline(message: str, session_id: str, options: Dict[str,
             logger.debug("Starting reranking...")
             try:
                 ranked_results = await retrieval_module.rerank(message, search_results, {
-                    "top_k": options.get("top_k", retrieval_config.get("top_k", 15)),
-                    "min_score": options.get("min_score", retrieval_config.get("min_score", 0.4))
+                    "top_k": options.get("top_k", 10),  # 리랭킹 후 10개로 변경
+                    "min_score": options.get("min_score", 0.15)  # 15% 이하 필터링
                 })
                 logger.debug("Reranking completed successfully",
                            original_count=len(search_results),
@@ -260,7 +260,8 @@ async def execute_rag_pipeline(message: str, session_id: str, options: Dict[str,
         
         # 5. 결과 포맷팅
         sources = []
-        for index, doc in enumerate(ranked_results[:options.get("max_sources", 5)]):
+        # 최대 10개까지 표시하되, 15% 이상인 문서만 포함
+        for index, doc in enumerate(ranked_results[:options.get("max_sources", 10)]):
             # 메타데이터 구조 분석
             if index == 0:
                 logger.info("Document metadata structure analysis",
@@ -278,13 +279,20 @@ async def execute_rag_pipeline(message: str, session_id: str, options: Dict[str,
             elif hasattr(doc, 'metadata'):
                 metadata = doc.metadata
             
+            # 유사도 점수 가져오기 (0~1 범위)
+            raw_score = getattr(doc, 'score', 0)
+            
+            # 15% 미만 문서는 제외
+            if raw_score < 0.15:
+                continue
+                
             sources.append(Source(
                 id=index + 1,
                 document=metadata.get('source_file') or metadata.get('source') or 
                         metadata.get('filename') or metadata.get('document_id') or 'Unknown',
                 page=metadata.get('page_number') or metadata.get('page'),
                 chunk=metadata.get('chunk_index') or metadata.get('chunk'),
-                relevance=getattr(doc, 'score', 0),
+                relevance=raw_score,  # 정규화된 점수 그대로 사용
                 content_preview=(getattr(doc, 'content', '') or '')[:150] + '...'
             ))
         

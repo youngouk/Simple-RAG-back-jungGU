@@ -50,16 +50,16 @@ document_processing:
 
 retrieval:
   max_sources: 25  # 검색 결과 수 증가 (20 -> 25)
-  min_score: 0.4   # 유사도 임계값 완화 (0.5 -> 0.4)
-  top_k: 15
-  enable_reranking: true   # 리랭킹 활성화 시도
-  quality_threshold: 0.3   # 품질 검증 임계값 추가
+  min_score: 0.15  # 유사도 임계값 15%로 설정
+  top_k: 10       # 리랭킹 후 최종 10개 문서
+  enable_reranking: true   # 리랭킹 활성화
+  quality_threshold: 0.15  # 품질 검증 임계값 15%
   deduplication_enabled: true  # 중복 제거 활성화
 
 reranking:
   enabled: true
   default_provider: "llm"  # API 키 없이 LLM 리랭킹 사용
-  min_score: 0.3  # 리랭킹 후 최소 점수
+  min_score: 0.15  # 리랭킹 후 최소 점수 15%
   providers:
     cohere:
       api_key: ""  # 필요시 API 키 추가
