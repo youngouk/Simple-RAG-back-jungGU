@@ -17,8 +17,8 @@ class RAGLogger:
     
     def __init__(self):
         self.log_level = os.getenv("LOG_LEVEL", "INFO").upper()
-        self.log_dir = Path(__file__).parent.parent.parent.parent / "logs"
-        self.log_dir.mkdir(exist_ok=True)
+        self.log_dir = Path("/app/logs")  # Fixed: Use /app/logs instead of root /logs
+        self.log_dir.mkdir(exist_ok=True, parents=True)
         
         self._setup_logging()
     
