@@ -26,21 +26,24 @@ embeddings:
 
 llm:
   providers: ["google", "anthropic", "openai"]
+  default_provider: "openai"  # 기본 모델 설정 (google, anthropic, openai 중 선택)
+  auto_fallback: true  # 자동 폴백 활성화
+  fallback_order: ["openai", "anthropic", "google"]  # 폴백 순서 설정
   google:
     model: "gemini-2.0-flash-exp"
     api_key: "${GOOGLE_API_KEY:-}"
     temperature: 0.3
-    max_tokens: 2048
+    max_tokens: 5000
   anthropic:
-    model: "claude-3-5-sonnet-20241022"
+    model: "claude-sonnet-4-20250514"
     api_key: "${ANTHROPIC_API_KEY:-}"
     temperature: 0.3
-    max_tokens: 2048
+    max_tokens: 5000
   openai:
-    model: "gpt-4o-mini"
+    model: "gpt-5-2025-08-07"
     api_key: "${OPENAI_API_KEY:-}"
     temperature: 0.3
-    max_tokens: 2048
+    max_tokens: 5000
 
 document_processing:
   splitter_type: "recursive"
@@ -71,7 +74,7 @@ reranking:
     llm:
       enabled: true  # LLM 기반 리랭킹 활성화
       provider: "google"  # Google Gemini 사용
-      max_tokens: 1000
+      max_tokens: 20000
 
 session:
   ttl: 3600
