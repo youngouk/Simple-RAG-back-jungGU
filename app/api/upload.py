@@ -86,12 +86,24 @@ class BulkDeleteResponse(BaseModel):
 
 def get_upload_directory() -> Path:
     """업로드 디렉토리 반환"""
-    upload_dir = Path(__file__).parent.parent.parent.parent / "uploads"
-    upload_dir.mkdir(exist_ok=True)
+    # config에서 설정된 경로를 사용하거나 기본값 사용
+    upload_path = config.get('uploads', {}).get('directory', './uploads')
+    upload_dir = Path(upload_path).resolve()
     
-    # temp 디렉토리도 생성
-    temp_dir = upload_dir / "temp"
-    temp_dir.mkdir(exist_ok=True)
+    # 디렉토리가 없으면 생성 (권한이 있는 경우만)
+    try:
+        upload_dir.mkdir(exist_ok=True, parents=True)
+        
+        # temp 디렉토리도 생성
+        temp_dir = upload_dir / "temp"
+        temp_dir.mkdir(exist_ok=True)
+    except PermissionError:
+        # 권한이 없으면 /app/uploads 사용 (Docker 컨테이너 내에서)
+        upload_dir = Path("/app/uploads")
+        upload_dir.mkdir(exist_ok=True, parents=True)
+        
+        temp_dir = upload_dir / "temp"
+        temp_dir.mkdir(exist_ok=True)
     
     return upload_dir
 
@@ -144,8 +156,8 @@ def validate_file(file: UploadFile) -> Dict[str, Any]:
     else:
         file_type = supported_types[file.content_type]
     
-    # 파일 크기 제한 (기본 10MB)
-    max_size = config.get('upload', {}).get('max_file_size', 10 * 1024 * 1024)
+    # 파일 크기 제한 (기본 50MB) - uploads 섹션에서 읽기
+    max_size = config.get('uploads', {}).get('max_file_size', 50 * 1024 * 1024)
     if file.size and file.size > max_size:
         return {
             "valid": False,
@@ -499,6 +511,6 @@ async def get_supported_types():
                 "max_size_mb": 10
             }
         },
-        "max_file_size": config.get('upload', {}).get('max_file_size', 10 * 1024 * 1024),
+        "max_file_size": config.get('uploads', {}).get('max_file_size', 50 * 1024 * 1024),
         "max_files_per_request": 1
     }
