@@ -302,26 +302,29 @@ class RetrievalModule:
             raise
     
     async def search(self, query: str, options: Dict[str, Any] = None) -> List[SearchResult]:
-        """검색 실행 (Qdrant 네이티브 하이브리드 검색)"""
+        """검색 실행 (개선된 검색 및 중복 제거)"""
         options = options or {}
         limit = options.get('limit', 20)
-        min_score = options.get('min_score', 0.3)
+        min_score = options.get('min_score', 0.5)  # 기본 임계값을 0.5로 상향
         
         self.stats['total_searches'] += 1
         
         try:
-            logger.debug(f"Searching for: {query[:50]}...")
+            logger.debug(f"Searching for: {query[:50]}... (min_score={min_score})")
             
-            # 임시로 Dense 검색만 사용 (하이브리드 검색에서 RRF 점수 문제 때문에)
-            if False:  # self.hybrid_enabled:
+            # 쿼리 전처리 - 한국어 검색 개선
+            processed_query = self._preprocess_korean_query(query)
+            
+            # 하이브리드 검색 사용 여부 결정 (스파스 임베더 사용 가능할 때만)
+            if self.hybrid_enabled and self.sparse_embedder:
                 # 하이브리드 검색 실행
-                results = await self._hybrid_search(query, limit, min_score)
+                results = await self._hybrid_search(processed_query, limit * 2, min_score)
                 self.stats['hybrid_searches'] += 1
                 logger.info(f"Hybrid search completed: {len(results)} results")
             else:
                 # Dense 검색만 실행
                 query_embedding = await asyncio.to_thread(
-                    self.embedder.embed_query, query
+                    self.embedder.embed_query, processed_query
                 )
                 results = await self._dense_search(query_embedding, limit=limit)
                 
@@ -330,13 +333,13 @@ class RetrievalModule:
                     result for result in results 
                     if result.score >= min_score
                 ]
-                logger.info(f"Dense search completed: {len(results)} results")
+                logger.info(f"Dense search completed: {len(results)} results (after filtering)")
             
-            # 점수 로깅 (디버깅용)
-            for i, result in enumerate(results[:3]):  # 최상위 3개만 로깅
-                logger.info(f"Result {i+1}: score={result.score:.4f}, content preview: {result.content[:50]}...")
+            # 최종 결과 품질 검증
+            quality_results = self._validate_search_quality(query, results)
             
-            return results[:limit]
+            logger.info(f"Search completed: {len(quality_results)} high-quality results returned")
+            return quality_results[:limit]
             
         except Exception as e:
             logger.error(f"Search failed: {e}")
@@ -476,27 +479,49 @@ class RetrievalModule:
             )
     
     async def _dense_search(self, query_embedding: List[float], limit: int) -> List[SearchResult]:
-        """Dense 벡터 검색"""
+        """Dense 벡터 검색 (중복 제거 및 스코어 정규화 포함)"""
         try:
+            # 더 많은 결과를 가져와서 중복 제거 후 필터링
             search_result = await asyncio.to_thread(
                 self.qdrant_client.search,
                 collection_name=self.collection_name,
                 query_vector=("dense", query_embedding),
-                limit=limit,
+                limit=limit * 3,  # 중복 제거를 고려하여 3배 더 가져옴
                 with_payload=True
             )
             
-            results = []
-            for point in search_result:
-                results.append(SearchResult(
-                    id=str(point.id),
-                    content=point.payload['content'],
-                    score=point.score,
-                    metadata=point.payload['metadata']
-                ))
+            # 중복 제거를 위한 콘텐츠 해시 추적
+            seen_content = set()
+            unique_results = []
             
-            logger.info(f"Dense search processed {len(search_result)} raw results into {len(results)} SearchResult objects")
-            return results
+            for point in search_result:
+                content = point.payload['content']
+                # 콘텐츠 해시로 중복 검사 (공백 정규화 후)
+                content_hash = hash(content.strip())
+                
+                if content_hash not in seen_content:
+                    seen_content.add(content_hash)
+                    # 코사인 유사도 스코어 정규화 (0~1 범위로 변환)
+                    normalized_score = max(0.0, min(1.0, (point.score + 1.0) / 2.0))
+                    
+                    unique_results.append(SearchResult(
+                        id=str(point.id),
+                        content=content,
+                        score=normalized_score,
+                        metadata=point.payload['metadata']
+                    ))
+            
+            # 스코어 기준으로 정렬하고 limit만큼 반환
+            unique_results.sort(key=lambda x: x.score, reverse=True)
+            final_results = unique_results[:limit]
+            
+            logger.info(f"Dense search: {len(search_result)} raw -> {len(unique_results)} unique -> {len(final_results)} final results")
+            
+            # 상위 3개 결과의 스코어 로깅
+            for i, result in enumerate(final_results[:3]):
+                logger.info(f"Result {i+1}: score={result.score:.3f} (normalized), content: {result.content[:50]}...")
+            
+            return final_results
             
         except Exception as e:
             logger.error(f"Dense search failed: {e}")
@@ -637,6 +662,77 @@ class RetrievalModule:
             logger.error(f"Cohere reranking failed: {e}")
             return results
     
+    async def _rerank_llm(self, query: str, results: List[SearchResult], top_k: int) -> List[SearchResult]:
+        """LLM 기반 리랭킹 (API 키 불필요)"""
+        try:
+            # LLM 설정 가져오기
+            from ..config.config_manager import config
+            llm_config = config.get('llm', {}).get('google', {})
+            
+            if not llm_config.get('api_key'):
+                logger.warning("Google API key not available for LLM reranking")
+                return results
+            
+            # Google Generative AI 사용
+            import google.generativeai as genai
+            genai.configure(api_key=llm_config['api_key'])
+            model = genai.GenerativeModel('gemini-1.5-flash')  # 빠른 모델 사용
+            
+            # 리랭킹용 프롬프트 생성
+            documents_text = ""
+            for i, result in enumerate(results[:10]):  # 상위 10개만 리랭킹
+                documents_text += f"\n[{i}] {result.content[:200]}..."  # 200자로 제한
+            
+            prompt = f"""다음 문서들을 쿼리에 대한 연관성 순서로 정렬하고, 각각에 0.0~1.0 사이의 점수를 매겨주세요.
+
+쿼리: "{query}"
+
+문서들:
+{documents_text}
+
+최고 {top_k}개만 선택하여 JSON 형식으로 답변:
+{{"results": [{{"index": 0, "score": 0.9}}, {{"index": 2, "score": 0.7}}, ...]}}"""
+            
+            # LLM 리랭킹 요청
+            response = await asyncio.to_thread(
+                model.generate_content,
+                prompt,
+                generation_config=genai.types.GenerationConfig(
+                    max_output_tokens=1000,
+                    temperature=0.1  # 일관성 위해 낮은 temperature
+                )
+            )
+            
+            # JSON 결과 파싱
+            import json
+            import re
+            
+            response_text = response.text.strip()
+            # JSON 부분만 추출
+            json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
+            if json_match:
+                rerank_data = json.loads(json_match.group())
+                
+                reranked_results = []
+                for item in rerank_data.get('results', [])[:top_k]:
+                    idx = item.get('index', 0)
+                    score = max(0.0, min(1.0, item.get('score', 0.5)))  # 0~1 범위 제한
+                    
+                    if 0 <= idx < len(results):
+                        original_result = results[idx]
+                        original_result.score = score
+                        reranked_results.append(original_result)
+                
+                logger.info(f"LLM reranking completed: {len(reranked_results)} results")
+                return reranked_results
+            else:
+                logger.warning("Failed to parse LLM reranking response")
+                return results
+                
+        except Exception as e:
+            logger.error(f"LLM reranking failed: {e}")
+            return results
+    
     async def _rerank_jina(self, query: str, results: List[SearchResult], top_k: int) -> List[SearchResult]:
         """Jina 리랭킹"""
         try:
@@ -759,6 +855,56 @@ class RetrievalModule:
             'available_rerankers': list(self.rerankers.keys()),
             'sparse_embedder_available': self.sparse_embedder is not None
         }
+    
+    def _preprocess_korean_query(self, query: str) -> str:
+        """한국어 쿼리 전처리"""
+        import re
+        
+        # 기본 전처리
+        processed = query.strip()
+        
+        # 숫자 및 특수문자 정규화
+        processed = re.sub(r'\s+', ' ', processed)  # 여러 공백을 하나로
+        
+        # 질문 형식 처리 ("~인가요?", "~인가?" -> 핵심 단어만 추출)
+        if '인가' in processed and ('?' in processed or '요' in processed):
+            # 질문에서 핵심 단어 추출
+            processed = re.sub(r'인가요?\??', '', processed)
+            processed = re.sub(r'[?\uc694]', '', processed)
+        
+        return processed.strip()
+    
+    def _validate_search_quality(self, query: str, results: List[SearchResult]) -> List[SearchResult]:
+        """검색 결과 품질 검증 및 필터링"""
+        if not results:
+            return results
+        
+        # 쿼리의 핵심 키워드 추출
+        import re
+        query_keywords = set(re.findall(r'[\uac00-\ud7a3]+|\d+', query.lower()))
+        
+        quality_results = []
+        for result in results:
+            # 콘텐츠에서 키워드 매칭 여부 확인
+            content_keywords = set(re.findall(r'[\uac00-\ud7a3]+|\d+', result.content.lower()))
+            
+            # 키워드 교집 비율 계산
+            if query_keywords:
+                intersection = query_keywords.intersection(content_keywords)
+                relevance_ratio = len(intersection) / len(query_keywords)
+                
+                # 유사도 조정 (키워드 매칭 고려)
+                adjusted_score = result.score * (0.7 + 0.3 * relevance_ratio)
+                result.score = min(1.0, adjusted_score)
+                
+                # 최소 연관성 임계값
+                if relevance_ratio > 0.1 or result.score > 0.7:  # 10% 이상 매칭 또는 높은 유사도
+                    quality_results.append(result)
+            else:
+                quality_results.append(result)  # 키워드가 없으면 모두 포함
+        
+        logger.info(f"Quality validation: {len(results)} -> {len(quality_results)} results after relevance filtering")
+        return quality_results
     
     async def clear_cache(self):
         """캐시 클리어 (현재 구현에서는 통계만 업데이트)"""

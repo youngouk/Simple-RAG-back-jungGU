@@ -132,32 +132,36 @@ def get_upload_directory() -> Path:
 
 def estimate_processing_time(file_size: int, file_type: str) -> float:
     """파일 크기와 타입을 기반으로 처리 시간 예측"""
-    base_time = 10.0  # 기본 10초 (초기 설정 시간)
+    base_time = 20.0  # 기본 20초 (초기화 + 로드 시간)
     
-    # 파일 크기당 추가 시간 (MB당 5초 - 임베딩 생성 시간 고려)
+    # 파일 크기당 추가 시간 (실제 관찰값 기반)
     size_mb = file_size / (1024 * 1024)
-    size_factor = size_mb * 5.0
     
-    # 파일 타입별 계수 (복잡도 반영)
-    type_factors = {
-        'pdf': 2.0,  # PDF는 텍스트 추출이 복잡
-        'docx': 1.5,
-        'xlsx': 2.5,  # 스프레드시트는 더 복잡
-        'txt': 0.8,
-        'md': 0.8,
-        'html': 1.2,
-        'csv': 1.3
+    # 파일 타입별 처리 시간 (실제 테스트 기반)
+    processing_rates = {
+        'pdf': 15.0,    # 22MB PDF가 약 4-5분 걸린 것을 기준으로 MB당 15초
+        'docx': 10.0,   # Word 문서
+        'xlsx': 20.0,   # 스프레드시트는 더 복잡
+        'txt': 3.0,     # 텍스트 파일은 빠름
+        'md': 3.0,      # 마크다운도 빠름
+        'html': 8.0,    # HTML 파싱 시간 포함
+        'csv': 12.0     # 구조화된 데이터 처리
     }
     
     ext = file_type.lower()
-    type_factor = type_factors.get(ext, 1.0)
+    rate = processing_rates.get(ext, 10.0)
     
-    # 큰 파일에 대한 추가 보정 (20MB 이상)
-    if size_mb > 20:
-        large_file_penalty = (size_mb - 20) * 2  # MB당 2초 추가
-        return base_time + (size_factor * type_factor) + large_file_penalty
+    # 기본 계산: base_time + (MB * 처리율)
+    estimated_time = base_time + (size_mb * rate)
     
-    return base_time + (size_factor * type_factor)
+    # 대용량 파일 추가 보정 (임베딩 생성이 기하급수적으로 증가)
+    if size_mb > 10:
+        # 10MB 초과 시 청크 수가 많아져서 추가 시간 필요
+        extra_penalty = (size_mb - 10) * 3  # MB당 3초 추가
+        estimated_time += extra_penalty
+    
+    # 최소 30초, 최대 1800초(30분) 제한
+    return max(30.0, min(estimated_time, 1800.0))
 
 def validate_file(file: UploadFile) -> Dict[str, Any]:
     """파일 검증"""
@@ -362,7 +366,13 @@ async def upload_document(
         else:
             time_msg = f"약 {estimated_time:.0f}초"
         
-        user_message = f"파일 업로드 완료! 문서 처리 중입니다. 예상 시간: {time_msg} (파일 크기: {size_mb:.1f}MB)"
+        # 대용량 파일에 대한 안내 메시지
+        if size_mb > 10:
+            warning_msg = " ⚠️ 대용량 파일로 인해 처리 시간이 오래 걸릴 수 있습니다. 브라우저를 닫지 마세요."
+        else:
+            warning_msg = ""
+            
+        user_message = f"파일 업로드 완료! 문서 처리 중입니다. 예상 시간: {time_msg} (파일 크기: {size_mb:.1f}MB){warning_msg}"
         
         return UploadResponse(
             job_id=job_id,

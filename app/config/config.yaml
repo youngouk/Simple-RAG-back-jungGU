@@ -49,14 +49,17 @@ document_processing:
   max_file_size: 52428800  # 50MB
 
 retrieval:
-  max_sources: 20
-  min_score: 0.5  # 코사인 유사도 최소 임계값 (50% 이상만 허용)
+  max_sources: 25  # 검색 결과 수 증가 (20 -> 25)
+  min_score: 0.4   # 유사도 임계값 완화 (0.5 -> 0.4)
   top_k: 15
-  enable_reranking: false  # API 키 없이는 비활성화
+  enable_reranking: true   # 리랭킹 활성화 시도
+  quality_threshold: 0.3   # 품질 검증 임계값 추가
+  deduplication_enabled: true  # 중복 제거 활성화
 
 reranking:
   enabled: true
-  default_provider: "cohere"
+  default_provider: "llm"  # API 키 없이 LLM 리랭킹 사용
+  min_score: 0.3  # 리랭킹 후 최소 점수
   providers:
     cohere:
       api_key: ""  # 필요시 API 키 추가
@@ -65,6 +68,10 @@ reranking:
       api_key: ""  # 필요시 API 키 추가
       model: "jina-reranker-v1-base-en"
       endpoint: "https://api.jina.ai/v1/rerank"
+    llm:
+      enabled: true  # LLM 기반 리랭킹 활성화
+      provider: "google"  # Google Gemini 사용
+      max_tokens: 1000
 
 session:
   ttl: 3600
