@@ -39,14 +39,14 @@ RUN useradd --create-home --shell /bin/bash app
 # Set working directory
 WORKDIR /app
 
-# Copy virtual environment from builder
+# Copy virtual environment and UV Python from builder
 COPY --from=builder /app/.venv /app/.venv
+COPY --from=builder /root/.local/share/uv/python /root/.local/share/uv/python
 
 # Fix permissions for virtual environment - comprehensive approach
 RUN chown -R app:app /app/.venv && \
     chmod -R 755 /app/.venv && \
-    find /app/.venv -type f -executable -exec chmod +x {} \; && \
-    find /app/.venv -name "python*" -exec chmod 755 {} \; && \
+    chmod -R 755 /root/.local/share/uv/python && \
     ls -la /app/.venv/bin/ && \
     echo "=== Testing Python executable ===" && \
     /app/.venv/bin/python --version && \
