@@ -145,6 +145,9 @@ default_allowed_origins = [
     "http://localhost:3000",
     "http://localhost:3001",
     "http://localhost:5173",
+    # Railway 프로덕션 도메인 추가
+    "https://simple-rag-frontend-production.up.railway.app",
+    "https://simple-rag-production-bb72.up.railway.app",
 ]
 env_allowed_origins = os.getenv("ALLOWED_ORIGINS", "")
 if env_allowed_origins:
