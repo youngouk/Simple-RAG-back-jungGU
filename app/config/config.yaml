@@ -1,0 +1,80 @@
+# Production Configuration
+app:
+  name: "RAG Chatbot"
+  version: "2.0.0"
+  debug: false
+
+server:
+  host: "${HOST:-0.0.0.0}"
+  port: "${PORT:-8000}"
+
+qdrant:
+  url: "${QDRANT_URL}"
+  api_key: "${QDRANT_API_KEY:-}"
+  collection_name: "documents"
+  vector_size: 768
+  distance: "cosine"
+  hybrid_search:
+    dense_weight: 0.6
+    sparse_weight: 0.4
+
+embeddings:
+  provider: "google"
+  model: "models/text-embedding-004"
+  sparse_model: "Qdrant/bm42-all-minilm-l6-v2-attentions"
+  batch_size: 100
+
+llm:
+  providers: ["google", "anthropic", "openai"]
+  google:
+    model: "gemini-2.0-flash-exp"
+    api_key: "${GOOGLE_API_KEY:-}"
+    temperature: 0.3
+    max_tokens: 2048
+  anthropic:
+    model: "claude-3-5-sonnet-20241022"
+    api_key: "${ANTHROPIC_API_KEY:-}"
+    temperature: 0.3
+    max_tokens: 2048
+  openai:
+    model: "gpt-4o-mini"
+    api_key: "${OPENAI_API_KEY:-}"
+    temperature: 0.3
+    max_tokens: 2048
+
+document_processing:
+  splitter_type: "recursive"
+  chunk_size: 400
+  chunk_overlap: 50
+  max_file_size: 52428800  # 50MB
+
+retrieval:
+  max_sources: 20
+  min_score: 0.5  # 코사인 유사도 최소 임계값 (50% 이상만 허용)
+  top_k: 15
+  enable_reranking: false  # API 키 없이는 비활성화
+
+reranking:
+  enabled: true
+  default_provider: "cohere"
+  providers:
+    cohere:
+      api_key: ""  # 필요시 API 키 추가
+      model: "rerank-multilingual-v2.0"
+    jina:
+      api_key: ""  # 필요시 API 키 추가
+      model: "jina-reranker-v1-base-en"
+      endpoint: "https://api.jina.ai/v1/rerank"
+
+session:
+  ttl: 3600
+  max_exchanges: 5
+
+logging:
+  level: "DEBUG"
+  format: "structured"
+
+uploads:
+  directory: "./uploads"
+  max_file_size: 52428800
+  allowed_types: [".pdf", ".txt", ".md", ".docx", ".xlsx"]

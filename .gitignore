@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# OS / IDE
+.DS_Store
+.vscode/
+.idea/
+
+# Logs
+*.log
+
+# Local env files
+.env
+.env.*
+
+# Byte-compiled / optimized / DLL files
+*.so
+
+# Cache
+.cache/
+pytest_cache/
+
+# Coverage
+.coverage
+htmlcov/
+
+# macOS
+.AppleDouble
+.LSOverride
+Icon?
+
