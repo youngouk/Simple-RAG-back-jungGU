@@ -380,10 +380,11 @@ async def upload_document(
 @router.get("/upload/status/{job_id}", response_model=JobStatusResponse)
 async def get_upload_status(job_id: str):
     """업로드 작업 상태 조회"""
+    global upload_jobs
+    
     # 메모리에서 찾지 못하면 파일에서 다시 로드 시도
     if job_id not in upload_jobs:
         logger.info(f"Job {job_id} not found in memory, reloading from file")
-        global upload_jobs
         upload_jobs = load_upload_jobs()
         
         if job_id not in upload_jobs:
