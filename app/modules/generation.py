@@ -286,34 +286,68 @@ class GenerationModule:
     
     async def _generate_openai(self, client_info: Dict[str, Any], prompt: str, 
                              options: Dict[str, Any]) -> GenerationResult:
-        """OpenAI로 생성"""
+        """OpenAI로 생성 (GPT-5 및 레거시 모델 지원)"""
         try:
             client = client_info['client']
             config = client_info['config']
+            model_name = client_info['model']
             
             # 메시지 구성
             messages = [
                 {"role": "user", "content": prompt}
             ]
             
-            # 생성 설정
-            generation_config = {
-                'temperature': config.get('temperature', 0.7),
-                'max_tokens': options.get('max_tokens', 2000),
-                'top_p': config.get('top_p', 1.0)
-            }
+            # 모델에 따른 파라미터 분기
+            max_tokens_value = options.get('max_tokens', config.get('max_tokens', 5000))
+            
+            # GPT-5 및 o1 시리즈는 max_completion_tokens 사용
+            if 'gpt-5' in model_name.lower() or 'o1' in model_name.lower():
+                generation_config = {
+                    'temperature': config.get('temperature', 0.3),
+                    'max_completion_tokens': max_tokens_value,  # GPT-5용 파라미터
+                    'top_p': config.get('top_p', 1.0)
+                }
+                # GPT-5 추가 파라미터 (선택적)
+                if 'gpt-5' in model_name.lower():
+                    # verbosity 파라미터 추가 (low, medium, high)
+                    generation_config['verbosity'] = options.get('verbosity', 'medium')
+                    # reasoning_effort 파라미터 추가 (minimal, standard, high)
+                    if options.get('reasoning_effort'):
+                        generation_config['reasoning_effort'] = options.get('reasoning_effort', 'standard')
+            else:
+                # 레거시 모델 (GPT-4, GPT-3.5 등)
+                generation_config = {
+                    'temperature': config.get('temperature', 0.7),
+                    'max_tokens': max_tokens_value,  # 기존 파라미터
+                    'top_p': config.get('top_p', 1.0)
+                }
+            
+            logger.debug(f"OpenAI model {model_name} using config: {generation_config}")
             
             # 생성 실행
             response = await asyncio.to_thread(
                 client.chat.completions.create,
-                model=client_info['model'],
+                model=model_name,
                 messages=messages,
                 **generation_config
             )
             
             # 결과 추출
             answer = response.choices[0].message.content
-            tokens_used = response.usage.total_tokens
+            
+            # 토큰 사용량 추출 (GPT-5는 reasoning_tokens 포함 가능)
+            if hasattr(response.usage, 'total_tokens'):
+                tokens_used = response.usage.total_tokens
+            else:
+                # GPT-5의 경우 completion_tokens_details 확인
+                tokens_used = getattr(response.usage, 'completion_tokens', 0) + \
+                            getattr(response.usage, 'prompt_tokens', 0)
+            
+            # GPT-5 reasoning_tokens 로깅 (있는 경우)
+            if hasattr(response.usage, 'completion_tokens_details'):
+                details = response.usage.completion_tokens_details
+                if hasattr(details, 'reasoning_tokens'):
+                    logger.info(f"GPT-5 reasoning tokens used: {details.reasoning_tokens}")
             
             return GenerationResult(
                 answer=answer,
