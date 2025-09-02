@@ -109,24 +109,30 @@ def get_upload_directory() -> Path:
 
 def estimate_processing_time(file_size: int, file_type: str) -> float:
     """파일 크기와 타입을 기반으로 처리 시간 예측"""
-    base_time = 2.0  # 기본 2초
+    base_time = 10.0  # 기본 10초 (초기 설정 시간)
     
-    # 파일 크기당 추가 시간 (MB당 1초)
-    size_factor = (file_size / (1024 * 1024)) * 1.0
+    # 파일 크기당 추가 시간 (MB당 5초 - 임베딩 생성 시간 고려)
+    size_mb = file_size / (1024 * 1024)
+    size_factor = size_mb * 5.0
     
-    # 파일 타입별 계수
+    # 파일 타입별 계수 (복잡도 반영)
     type_factors = {
-        'pdf': 1.5,
-        'docx': 1.2,
-        'xlsx': 2.0,
-        'txt': 0.5,
-        'md': 0.5,
-        'html': 0.8,
-        'csv': 1.0
+        'pdf': 2.0,  # PDF는 텍스트 추출이 복잡
+        'docx': 1.5,
+        'xlsx': 2.5,  # 스프레드시트는 더 복잡
+        'txt': 0.8,
+        'md': 0.8,
+        'html': 1.2,
+        'csv': 1.3
     }
     
     ext = file_type.lower()
     type_factor = type_factors.get(ext, 1.0)
+    
+    # 큰 파일에 대한 추가 보정 (20MB 이상)
+    if size_mb > 20:
+        large_file_penalty = (size_mb - 20) * 2  # MB당 2초 추가
+        return base_time + (size_factor * type_factor) + large_file_penalty
     
     return base_time + (size_factor * type_factor)
 
@@ -210,7 +216,7 @@ async def process_document_background(job_id: str, file_path: Path, filename: st
         # 임베딩 생성
         upload_jobs[job_id].update({
             "progress": 70,
-            "message": "임베딩 생성 중..."
+            "message": f"임베딩 생성 중... ({len(chunks)}개 청크)"
         })
         
         embedded_chunks = await document_processor.embed_chunks(chunks)
@@ -218,7 +224,7 @@ async def process_document_background(job_id: str, file_path: Path, filename: st
         # 벡터 스토어에 저장
         upload_jobs[job_id].update({
             "progress": 90,
-            "message": "벡터 DB에 저장 중..."
+            "message": f"벡터 DB에 저장 중... ({len(embedded_chunks)}개 임베딩)"
         })
         
         await retrieval_module.add_documents(embedded_chunks)
@@ -318,9 +324,18 @@ async def upload_document(
         
         logger.info(f"Document upload initiated: {file.filename}, job_id: {job_id}")
         
+        # 사용자 친화적 메시지 생성
+        size_mb = file_size / (1024 * 1024)
+        if estimated_time > 60:
+            time_msg = f"약 {estimated_time/60:.1f}분"
+        else:
+            time_msg = f"약 {estimated_time:.0f}초"
+        
+        user_message = f"파일 업로드 완료! 문서 처리 중입니다. 예상 시간: {time_msg} (파일 크기: {size_mb:.1f}MB)"
+        
         return UploadResponse(
             job_id=job_id,
-            message="File uploaded successfully and processing started",
+            message=user_message,
             filename=file.filename,
             file_size=file_size,
             estimated_processing_time=estimated_time,
@@ -339,6 +354,11 @@ async def get_upload_status(job_id: str):
     
     job = upload_jobs[job_id]
     
+    # 처리 시간 계산 (현재 진행 중인 경우)
+    current_processing_time = None
+    if job["status"] == "processing":
+        current_processing_time = datetime.now().timestamp() - job["start_time"]
+    
     return JobStatusResponse(
         job_id=job_id,
         status=job["status"],
@@ -346,7 +366,7 @@ async def get_upload_status(job_id: str):
         message=job["message"],
         filename=job["filename"],
         chunk_count=job["chunk_count"],
-        processing_time=job["processing_time"],
+        processing_time=job["processing_time"] or current_processing_time,
         error_message=job["error_message"],
         timestamp=datetime.now().isoformat()
     )
