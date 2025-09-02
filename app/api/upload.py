@@ -4,6 +4,7 @@ Upload API endpoints
 """
 import os
 import asyncio
+import json
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, Optional, List
@@ -28,8 +29,30 @@ def set_dependencies(app_modules: Dict[str, Any], app_config: Dict[str, Any]):
     modules = app_modules
     config = app_config
 
-# 업로드 상태 저장소 (실제 운영에서는 Redis 등 사용)
-upload_jobs: Dict[str, Dict[str, Any]] = {}
+# 업로드 상태 저장소 - 파일 기반 영구 저장
+JOBS_FILE = Path("/app/uploads/jobs.json")
+
+def load_upload_jobs() -> Dict[str, Dict[str, Any]]:
+    """업로드 작업 상태를 파일에서 로드"""
+    try:
+        if JOBS_FILE.exists():
+            with open(JOBS_FILE, 'r', encoding='utf-8') as f:
+                return json.load(f)
+    except Exception as e:
+        logger.warning(f"Failed to load jobs file: {e}")
+    return {}
+
+def save_upload_jobs(jobs: Dict[str, Dict[str, Any]]):
+    """업로드 작업 상태를 파일에 저장"""
+    try:
+        JOBS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with open(JOBS_FILE, 'w', encoding='utf-8') as f:
+            json.dump(jobs, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logger.error(f"Failed to save jobs file: {e}")
+
+# 업로드 상태 저장소 초기화
+upload_jobs: Dict[str, Dict[str, Any]] = load_upload_jobs()
 
 class DocumentInfo(BaseModel):
     """문서 정보 모델"""
@@ -184,6 +207,7 @@ async def process_document_background(job_id: str, file_path: Path, filename: st
             "progress": 10,
             "message": "문서 처리 시작..."
         })
+        save_upload_jobs(upload_jobs)
         
         document_processor = modules.get('document_processor')
         retrieval_module = modules.get('retrieval')
@@ -197,6 +221,7 @@ async def process_document_background(job_id: str, file_path: Path, filename: st
             "progress": 30,
             "message": "문서 로딩 중..."
         })
+        save_upload_jobs(upload_jobs)
         
         docs = await document_processor.load_document(str(file_path), {
             "source_file": filename,
@@ -209,6 +234,7 @@ async def process_document_background(job_id: str, file_path: Path, filename: st
             "progress": 50,
             "message": "문서 분할 중..."
         })
+        save_upload_jobs(upload_jobs)
         
         chunks = await document_processor.split_documents(docs)
         logger.info(f"Document split into {len(chunks)} chunks")
@@ -218,6 +244,7 @@ async def process_document_background(job_id: str, file_path: Path, filename: st
             "progress": 70,
             "message": f"임베딩 생성 중... ({len(chunks)}개 청크)"
         })
+        save_upload_jobs(upload_jobs)
         
         embedded_chunks = await document_processor.embed_chunks(chunks)
         
@@ -226,6 +253,7 @@ async def process_document_background(job_id: str, file_path: Path, filename: st
             "progress": 90,
             "message": f"벡터 DB에 저장 중... ({len(embedded_chunks)}개 임베딩)"
         })
+        save_upload_jobs(upload_jobs)
         
         await retrieval_module.add_documents(embedded_chunks)
         
@@ -244,6 +272,7 @@ async def process_document_background(job_id: str, file_path: Path, filename: st
             "chunk_count": len(chunks),
             "processing_time": processing_time
         })
+        save_upload_jobs(upload_jobs)
         
         logger.info(f"Document processing completed: {filename}, {len(chunks)} chunks, {processing_time:.2f}s")
         
@@ -257,6 +286,7 @@ async def process_document_background(job_id: str, file_path: Path, filename: st
             "message": "문서 처리 실패",
             "error_message": str(error)
         })
+        save_upload_jobs(upload_jobs)
         
         # 임시 파일 삭제 시도
         try:
@@ -309,6 +339,7 @@ async def upload_document(
             "processing_time": None,
             "error_message": None
         }
+        save_upload_jobs(upload_jobs)
         
         # 백그라운드 처리 시작
         background_tasks.add_task(
@@ -349,8 +380,18 @@ async def upload_document(
 @router.get("/upload/status/{job_id}", response_model=JobStatusResponse)
 async def get_upload_status(job_id: str):
     """업로드 작업 상태 조회"""
+    # 메모리에서 찾지 못하면 파일에서 다시 로드 시도
     if job_id not in upload_jobs:
-        raise HTTPException(status_code=404, detail="Job not found")
+        logger.info(f"Job {job_id} not found in memory, reloading from file")
+        global upload_jobs
+        upload_jobs = load_upload_jobs()
+        
+        if job_id not in upload_jobs:
+            logger.warning(f"Job {job_id} not found even after reload")
+            raise HTTPException(
+                status_code=404, 
+                detail=f"Job not found. The server may have restarted. Please try uploading again."
+            )
     
     job = upload_jobs[job_id]
     
@@ -358,6 +399,8 @@ async def get_upload_status(job_id: str):
     current_processing_time = None
     if job["status"] == "processing":
         current_processing_time = datetime.now().timestamp() - job["start_time"]
+    
+    logger.info(f"Job {job_id} status: {job['status']}, progress: {job['progress']}%")
     
     return JobStatusResponse(
         job_id=job_id,
