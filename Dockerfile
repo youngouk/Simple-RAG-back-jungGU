@@ -1,34 +1,7 @@
-# Multi-stage build for optimized Python RAG Chatbot with uv
-FROM python:3.11-slim as builder
-
-# Install uv
-RUN apt-get update && apt-get install -y curl && \
-    curl -LsSf https://astral.sh/uv/install.sh | sh && \
-    rm -rf /var/lib/apt/lists/*
-
-# Add uv to PATH
-ENV PATH="/root/.local/bin:$PATH"
-
-# Set working directory
-WORKDIR /app
-
-# Copy dependency files
-COPY pyproject.toml .
-COPY .python-version .
-COPY README.md .
-
-# Create virtual environment and install dependencies
-RUN uv venv && \
-    uv sync --no-dev
-
-# Production stage
+# Simple and reliable Python FastAPI build
 FROM python:3.11-slim
 
-# Cache buster to force rebuild
-ARG CACHE_BUST=2025-09-02-11-10
-RUN echo "Cache bust: $CACHE_BUST"
-
-# Install runtime dependencies
+# Install system dependencies
 RUN apt-get update && apt-get install -y \
     curl \
     && rm -rf /var/lib/apt/lists/*
@@ -39,18 +12,13 @@ RUN useradd --create-home --shell /bin/bash app
 # Set working directory
 WORKDIR /app
 
-# Copy virtual environment and UV Python from builder
-COPY --from=builder /app/.venv /app/.venv
-COPY --from=builder /root/.local/share/uv/python /root/.local/share/uv/python
+# Copy requirements first for better caching
+COPY pyproject.toml .
+COPY README.md .
 
-# Fix permissions for virtual environment - comprehensive approach
-RUN chown -R app:app /app/.venv && \
-    chmod -R 755 /app/.venv && \
-    chmod -R 755 /root/.local/share/uv/python && \
-    ls -la /app/.venv/bin/ && \
-    echo "=== Testing Python executable ===" && \
-    /app/.venv/bin/python --version && \
-    echo "Virtual environment permissions fixed"
+# Install Python dependencies using pip (avoid UV complications)
+RUN python -m pip install --upgrade pip && \
+    pip install -e .
 
 # Copy application code
 COPY --chown=app:app . .
@@ -62,9 +30,9 @@ RUN mkdir -p logs uploads/temp && \
 # Switch to non-root user
 USER app
 
-# Add virtual environment to PATH
-ENV PATH="/app/.venv/bin:$PATH"
+# Set environment variables
 ENV PYTHONPATH=/app
+ENV PYTHONUNBUFFERED=1
 
 # Expose port
 EXPOSE 8000
@@ -73,5 +41,5 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:${PORT:-8000}/health || exit 1
 
-# Use bash with inline command to handle dynamic PORT
-CMD ["bash", "-c", "/app/.venv/bin/python -m uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}"]
+# Use bash to handle dynamic PORT environment variable
+CMD ["bash", "-c", "python -m uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}"]
