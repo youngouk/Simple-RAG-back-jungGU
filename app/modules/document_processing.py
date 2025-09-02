@@ -14,6 +14,7 @@ from docx import Document as DocxDocument
 import pandas as pd
 from bs4 import BeautifulSoup
 import markdown
+import json
 
 # LangChain components
 from langchain.schema import Document
@@ -25,6 +26,14 @@ from ..lib.logger import get_logger
 
 logger = get_logger(__name__)
 
+# LangChain JSONLoader (선택적 import)
+try:
+    from langchain_community.document_loaders import JSONLoader
+    LANGCHAIN_JSONLOADER_AVAILABLE = True
+except ImportError:
+    logger.warning("LangChain JSONLoader not available, using basic JSON processing")
+    LANGCHAIN_JSONLOADER_AVAILABLE = False
+
 class DocumentProcessor:
     """문서 처리 모듈"""
     
@@ -35,7 +44,7 @@ class DocumentProcessor:
         
         # 지원하는 파일 타입
         self.supported_types = self.document_config.get('file_types', [
-            'pdf', 'txt', 'docx', 'xlsx', 'csv', 'html', 'md'
+            'pdf', 'txt', 'docx', 'xlsx', 'csv', 'html', 'md', 'json'
         ])
         
         # 텍스트 분할 설정
@@ -129,7 +138,8 @@ class DocumentProcessor:
             'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'xlsx',
             'text/csv': 'csv',
             'text/html': 'html',
-            'text/markdown': 'md'
+            'text/markdown': 'md',
+            'application/json': 'json'
         }
         
         return mime_to_ext.get(mime_type, 'txt')
@@ -151,7 +161,8 @@ class DocumentProcessor:
             'xlsx': self._load_xlsx,
             'csv': self._load_csv,
             'html': self._load_html,
-            'md': self._load_markdown
+            'md': self._load_markdown,
+            'json': self._load_json
         }
         
         loader = loaders.get(file_type)
@@ -286,6 +297,140 @@ class DocumentProcessor:
         text = soup.get_text()
         
         return [Document(page_content=text, metadata={'format': 'markdown'})]
+    
+    async def _load_json(self, file_path: Path) -> List[Document]:
+        """JSON 파일 로딩 (LangChain JSONLoader 사용)"""
+        documents = []
+        
+        try:
+            # JSON 파일 읽기
+            with open(file_path, 'r', encoding='utf-8') as file:
+                json_data = json.load(file)
+            
+            logger.info(f"JSON 파일 로드 시작: {file_path.name}")
+            
+            # JSON 데이터 타입별 처리
+            if isinstance(json_data, list):
+                # 리스트 형태의 JSON
+                for idx, item in enumerate(json_data):
+                    content = await self._process_json_item(item, idx)
+                    if content:
+                        documents.append(Document(
+                            page_content=content,
+                            metadata={
+                                'json_type': 'list_item',
+                                'item_index': idx,
+                                'total_items': len(json_data)
+                            }
+                        ))
+                        
+            elif isinstance(json_data, dict):
+                # 딕셔너리 형탄의 JSON
+                content = await self._process_json_item(json_data, 0)
+                if content:
+                    documents.append(Document(
+                        page_content=content,
+                        metadata={
+                            'json_type': 'object',
+                            'keys': list(json_data.keys())[:10]  # 처음 10개 키만 저장
+                        }
+                    ))
+                    
+            else:
+                # 기본 타입 (string, number 등)
+                content = str(json_data)
+                documents.append(Document(
+                    page_content=content,
+                    metadata={'json_type': 'primitive'}
+                ))
+            
+            # 고급 처리: LangChain JSONLoader 사용 (선택적)
+            if hasattr(self.document_config, 'json_loader_config'):
+                json_config = self.document_config.json_loader_config
+                if json_config.get('use_langchain_loader', False):
+                    documents.extend(await self._load_json_with_langchain(file_path, json_config))
+            
+            logger.info(f"JSON 로딩 완료: {len(documents)}개 문서 생성")
+            return documents
+            
+        except json.JSONDecodeError as e:
+            logger.error(f"JSON 파싱 오류: {e}")
+            raise ValueError(f"Invalid JSON file: {e}")
+        except Exception as e:
+            logger.error(f"JSON 로딩 오류: {e}")
+            raise
+    
+    async def _process_json_item(self, item: Any, index: int = 0) -> str:
+        """개별 JSON 아이템을 텍스트로 변환"""
+        try:
+            if isinstance(item, dict):
+                # 딕셔너리를 키-값 쌍으로 변환
+                content_parts = []
+                for key, value in item.items():
+                    if isinstance(value, (dict, list)):
+                        # 중첩된 객체는 JSON 문자열로 변환
+                        value_str = json.dumps(value, ensure_ascii=False, indent=2)
+                        content_parts.append(f"{key}: {value_str}")
+                    else:
+                        content_parts.append(f"{key}: {value}")
+                return "\n".join(content_parts)
+                
+            elif isinstance(item, list):
+                # 리스트를 인덱스가 있는 텍스트로 변환
+                content_parts = []
+                for idx, sub_item in enumerate(item):
+                    if isinstance(sub_item, (dict, list)):
+                        sub_content = json.dumps(sub_item, ensure_ascii=False, indent=2)
+                    else:
+                        sub_content = str(sub_item)
+                    content_parts.append(f"[{idx}] {sub_content}")
+                return "\n".join(content_parts)
+                
+            else:
+                # 기본 타입
+                return str(item)
+                
+        except Exception as e:
+            logger.warning(f"JSON 아이템 처리 오류 (index {index}): {e}")
+            return str(item)  # 오류 시 기본 문자열 변환
+    
+    async def _load_json_with_langchain(self, file_path: Path, json_config: Dict[str, Any]) -> List[Document]:
+        """선택적 LangChain JSONLoader 사용 (고급 기능)"""
+        try:
+            # JSONLoader 설정
+            jq_schema = json_config.get('jq_schema', '.')  # 전체 JSON 데이터
+            content_key = json_config.get('content_key', None)  # 특정 키에서 콘텐츠 추출
+            
+            # LangChain JSONLoader 초기화
+            if content_key:
+                loader = JSONLoader(
+                    file_path=str(file_path),
+                    jq_schema=jq_schema,
+                    content_key=content_key
+                )
+            else:
+                loader = JSONLoader(
+                    file_path=str(file_path),
+                    jq_schema=jq_schema
+                )
+            
+            # 문서 로드
+            langchain_docs = await asyncio.to_thread(loader.load)
+            
+            # 메타데이터 추가
+            for doc in langchain_docs:
+                doc.metadata.update({
+                    'json_loader': 'langchain',
+                    'jq_schema': jq_schema,
+                    'content_key': content_key
+                })
+            
+            logger.info(f"LangChain JSONLoader로 {len(langchain_docs)}개 문서 추가 로드")
+            return langchain_docs
+            
+        except Exception as e:
+            logger.warning(f"LangChain JSONLoader 사용 실패, 기본 방식 사용: {e}")
+            return []
     
     async def split_documents(self, documents: List[Document]) -> List[Document]:
         """문서 분할"""

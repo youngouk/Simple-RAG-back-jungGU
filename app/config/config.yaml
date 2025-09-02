@@ -33,17 +33,17 @@ llm:
     model: "gemini-2.0-flash-exp"
     api_key: "${GOOGLE_API_KEY:-}"
     temperature: 0.3
-    max_tokens: 5000
+    max_tokens: 10000
   anthropic:
     model: "claude-sonnet-4-20250514"
     api_key: "${ANTHROPIC_API_KEY:-}"
     temperature: 0.3
-    max_tokens: 5000
+    max_tokens: 10000
   openai:
     model: "gpt-5-2025-08-07"
     api_key: "${OPENAI_API_KEY:-}"
     temperature: 0.3
-    max_tokens: 5000
+    max_tokens: 10000
 
 document_processing:
   splitter_type: "recursive"
@@ -87,4 +87,4 @@ logging:
 uploads:
   directory: "./uploads"
   max_file_size: 52428800
-  allowed_types: [".pdf", ".txt", ".md", ".docx", ".xlsx"]
+  allowed_types: [".pdf", ".txt", ".md", ".docx", ".xlsx", ".json"]
