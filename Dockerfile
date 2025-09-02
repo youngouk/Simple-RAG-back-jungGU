@@ -42,8 +42,12 @@ WORKDIR /app
 # Copy virtual environment from builder
 COPY --from=builder --chown=app:app /app/.venv /app/.venv
 
-# Fix permissions for virtual environment executables (ignore symlinks)
-RUN find /app/.venv/bin -type f -executable -exec chmod +x {} \; 2>/dev/null || true
+# Fix permissions for virtual environment - more comprehensive approach
+RUN chmod -R 755 /app/.venv/bin && \
+    find /app/.venv -name "python*" -type f -exec chmod +x {} \; && \
+    find /app/.venv/bin -type f -exec chmod +x {} \; && \
+    ls -la /app/.venv/bin/python* && \
+    echo "Python binary permissions fixed"
 
 # Copy application code
 COPY --chown=app:app . .
@@ -51,6 +55,12 @@ COPY --chown=app:app . .
 # Create necessary directories
 RUN mkdir -p logs uploads/temp && \
     chown -R app:app /app
+
+# Create entrypoint script before switching to non-root user
+RUN echo '#!/bin/bash\nset -e\nexport PORT=${PORT:-8000}\necho "Starting server on port $PORT"\nexec python -m uvicorn main:app --host 0.0.0.0 --port $PORT' > /app/entrypoint.sh && \
+    chmod +x /app/entrypoint.sh && \
+    chown app:app /app/entrypoint.sh && \
+    echo "Entrypoint script created:" && cat /app/entrypoint.sh
 
 # Switch to non-root user
 USER app
@@ -66,11 +76,5 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:${PORT:-8000}/health || exit 1
 
-# Create startup script
-RUN echo '#!/bin/bash\nexec /app/.venv/bin/python -m uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}' > /app/start.sh && \
-    chmod +x /app/start.sh && \
-    echo "Startup script created:" && cat /app/start.sh && \
-    echo "Script permissions:" && ls -la /app/start.sh
-
-# Command to run the application
-CMD ["/app/start.sh"]
+# Use the entrypoint script
+ENTRYPOINT ["/app/entrypoint.sh"]
