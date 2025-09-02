@@ -28,10 +28,9 @@ FROM python:3.11-slim
 ARG CACHE_BUST=2025-09-02-11-10
 RUN echo "Cache bust: $CACHE_BUST"
 
-# Install runtime dependencies including Python
+# Install runtime dependencies
 RUN apt-get update && apt-get install -y \
     curl \
-    python3.11 \
     && rm -rf /var/lib/apt/lists/*
 
 # Create non-root user
