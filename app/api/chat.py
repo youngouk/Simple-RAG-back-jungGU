@@ -160,6 +160,15 @@ async def handle_session(session_id: Optional[str], context: Dict[str, Any]) -> 
 
 def extract_topic(message: str) -> str:
     """토픽 추출 (간단한 키워드 기반)"""
+    # 안전한 메시지 처리
+    if isinstance(message, list):
+        message = ' '.join(str(item) for item in message)
+    elif not isinstance(message, str):
+        message = str(message)
+    
+    if not message:
+        return 'general'
+    
     keywords = {
         'search': ['검색', '찾기', '찾아', '검색해'],
         'document': ['문서', '파일', '자료', '데이터'],
@@ -168,13 +177,17 @@ def extract_topic(message: str) -> str:
         'general': ['일반', '기본', '소개', '개요']
     }
     
-    lower_message = message.lower()
-    
-    for topic, words in keywords.items():
-        if any(word in lower_message for word in words):
-            return topic
-    
-    return 'general'
+    try:
+        lower_message = message.lower()
+        
+        for topic, words in keywords.items():
+            if any(word in lower_message for word in words):
+                return topic
+        
+        return 'general'
+    except Exception:
+        # 오류 시 기본값 반환
+        return 'general'
 
 async def execute_rag_pipeline(message: str, session_id: str, options: Dict[str, Any] = None) -> Dict[str, Any]:
     """RAG 파이프라인 실행"""
@@ -264,70 +277,111 @@ async def execute_rag_pipeline(message: str, session_id: str, options: Dict[str,
             raise generation_error
         
         # 5. 결과 포맷팅
+        logger.debug("Step 5: Starting result formatting...")
         sources = []
-        # 최대 10개까지 표시하되, 15% 이상인 문서만 포함
-        for index, doc in enumerate(ranked_results[:options.get("max_sources", 10)]):
-            # 메타데이터 구조 분석
-            if index == 0:
-                logger.info("Document metadata structure analysis",
-                           doc_type=type(doc).__name__,
-                           doc_keys=list(doc.keys()) if hasattr(doc, 'keys') else None)
-            
-            # 다양한 메타데이터 위치에서 정보 추출
-            original_doc = getattr(doc, '_original', doc)
-            metadata = {}
-            
-            if hasattr(original_doc, 'payload') and original_doc.payload:
-                metadata = getattr(original_doc.payload, 'metadata', {})
-            elif hasattr(original_doc, 'metadata'):
-                metadata = original_doc.metadata
-            elif hasattr(doc, 'metadata'):
-                metadata = doc.metadata
-            
-            # 유사도 점수 가져오기 (0~1 범위)
-            raw_score = getattr(doc, 'score', 0)
-            
-            # 15% 미만 문서는 제외
-            if raw_score < 0.15:
-                continue
-                
-            # 콘텐츠 안전하게 추출하여 문자열로 변환
-            doc_content = getattr(doc, 'content', '') or ''
-            if isinstance(doc_content, list):
-                doc_content = ' '.join(str(item) for item in doc_content)
-            elif not isinstance(doc_content, str):
-                doc_content = str(doc_content)
-            
-            sources.append(Source(
-                id=index + 1,
-                document=metadata.get('source_file') or metadata.get('source') or 
-                        metadata.get('filename') or metadata.get('document_id') or 'Unknown',
-                page=metadata.get('page_number') or metadata.get('page'),
-                chunk=metadata.get('chunk_index') or metadata.get('chunk'),
-                relevance=raw_score,  # 정규화된 점수 그대로 사용
-                content_preview=doc_content[:150] + '...' if doc_content else 'No content'
-            ))
+        try:
+            # 최대 10개까지 표시하되, 15% 이상인 문서만 포함
+            for index, doc in enumerate(ranked_results[:options.get("max_sources", 10)]):
+                try:
+                    # 메타데이터 구조 분석
+                    if index == 0:
+                        logger.info("Document metadata structure analysis",
+                                   doc_type=type(doc).__name__,
+                                   doc_keys=list(doc.keys()) if hasattr(doc, 'keys') else None)
+                    
+                    # 다양한 메타데이터 위치에서 정보 추출
+                    original_doc = getattr(doc, '_original', doc)
+                    metadata = {}
+                    
+                    if hasattr(original_doc, 'payload') and original_doc.payload:
+                        metadata = getattr(original_doc.payload, 'metadata', {})
+                    elif hasattr(original_doc, 'metadata'):
+                        metadata = original_doc.metadata
+                    elif hasattr(doc, 'metadata'):
+                        metadata = doc.metadata
+                    
+                    # 유사도 점수 가져오기 (0~1 범위)
+                    raw_score = getattr(doc, 'score', 0)
+                    
+                    # 15% 미만 문서는 제외
+                    if raw_score < 0.15:
+                        continue
+                    
+                    # 콘텐츠 안전하게 추출하여 문자열로 변환
+                    doc_content = getattr(doc, 'content', '') or ''
+                    if isinstance(doc_content, list):
+                        logger.debug(f"Document {index} content is list type, converting to string")
+                        doc_content = ' '.join(str(item) for item in doc_content)
+                    elif not isinstance(doc_content, str):
+                        logger.debug(f"Document {index} content type: {type(doc_content)}, converting to string")
+                        doc_content = str(doc_content)
+                    
+                    logger.debug(f"Processing document {index} - score: {raw_score}, content length: {len(doc_content)}")
+                    
+                    sources.append(Source(
+                        id=index + 1,
+                        document=metadata.get('source_file') or metadata.get('source') or 
+                                metadata.get('filename') or metadata.get('document_id') or 'Unknown',
+                        page=metadata.get('page_number') or metadata.get('page'),
+                        chunk=metadata.get('chunk_index') or metadata.get('chunk'),
+                        relevance=raw_score,  # 정규화된 점수 그대로 사용
+                        content_preview=doc_content[:150] + '...' if doc_content else 'No content'
+                    ))
+                except Exception as doc_error:
+                    logger.error(f"Error processing document {index}: {doc_error}")
+                    continue
+        except Exception as sources_error:
+            logger.error(f"Error in sources processing: {sources_error}")
+            sources = []
         
         # 안전한 방식으로 답변 추출
-        final_answer = getattr(generation_result, 'answer', '') or getattr(generation_result, 'text', '')
-        if isinstance(final_answer, list):
-            final_answer = ' '.join(str(item) for item in final_answer)
-        
-        return {
-            "answer": final_answer,
-            "sources": sources,
-            "tokens_used": getattr(generation_result, 'tokens_used', 0),
-            "topic": extract_topic(message),
-            "processing_time": time.time() - start_time,
-            "search_results": len(search_results),
-            "ranked_results": len(ranked_results),
-            "model_info": {
-                "provider": getattr(generation_result, 'provider', 'unknown'),
-                "model": getattr(generation_result, 'model_used', 'unknown'),
-                "generation_time": getattr(generation_result, 'generation_time', 0),
-                "model_config": getattr(generation_result, 'model_config', {})
+        logger.debug("Step 6: Extracting final answer...")
+        try:
+            logger.debug(f"Generation result type: {type(generation_result)}")
+            
+            # 안전한 방식으로 속성 확인
+            try:
+                attrs = dir(generation_result)
+                logger.debug(f"Generation result attributes: {attrs}")
+            except Exception as attr_error:
+                logger.debug(f"Could not get attributes: {attr_error}")
+            
+            final_answer = getattr(generation_result, 'answer', '') or getattr(generation_result, 'text', '')
+            logger.debug(f"Final answer type: {type(final_answer)}")
+            
+            if isinstance(final_answer, list):
+                logger.debug("Final answer is list type, converting to string")
+                final_answer = ' '.join(str(item) for item in final_answer)
+            
+            logger.debug(f"Final answer length: {len(final_answer) if final_answer else 0}")
+            
+            # 결과 딕셔너리 생성
+            logger.debug("Step 7: Creating result dictionary...")
+            # 안전한 길이 계산
+            search_count = len(search_results) if search_results else 0
+            ranked_count = len(ranked_results) if ranked_results else 0
+            
+            result_dict = {
+                "answer": final_answer,
+                "sources": sources,
+                "tokens_used": getattr(generation_result, 'tokens_used', 0),
+                "topic": extract_topic(message),
+                "processing_time": time.time() - start_time,
+                "search_results": search_count,
+                "ranked_results": ranked_count,
+                "model_info": {
+                    "provider": getattr(generation_result, 'provider', 'unknown'),
+                    "model": getattr(generation_result, 'model_used', 'unknown'),
+                    "generation_time": getattr(generation_result, 'generation_time', 0),
+                    "model_config": getattr(generation_result, 'model_config', {})
+                }
             }
-        }
+            logger.debug("Result dictionary created successfully")
+            return result_dict
+            
+        except Exception as final_error:
+            logger.error(f"Error in final answer processing: {final_error}")
+            raise final_error
         
     except Exception as error:
         logger.error("RAG pipeline error",
