@@ -247,11 +247,16 @@ async def execute_rag_pipeline(message: str, session_id: str, options: Dict[str,
                 "max_tokens": options.get("max_tokens", 2000)
             })
             
+            # 안전한 방식으로 텍스트 존재 여부 확인
+            answer_text = getattr(generation_result, 'answer', '') or getattr(generation_result, 'text', '')
+            if isinstance(answer_text, list):
+                answer_text = ' '.join(str(item) for item in answer_text)
+            
             logger.info("Answer generation completed",
                        result_type=type(generation_result).__name__,
                        has_result=bool(generation_result),
-                       has_text=bool(generation_result.text or generation_result.answer),
-                       tokens_used=generation_result.tokens_used)
+                       has_text=bool(answer_text),
+                       tokens_used=getattr(generation_result, 'tokens_used', 0))
                        
         except Exception as generation_error:
             logger.error("Answer generation error", error=str(generation_error))
@@ -296,19 +301,24 @@ async def execute_rag_pipeline(message: str, session_id: str, options: Dict[str,
                 content_preview=(getattr(doc, 'content', '') or '')[:150] + '...'
             ))
         
+        # 안전한 방식으로 답변 추출
+        final_answer = getattr(generation_result, 'answer', '') or getattr(generation_result, 'text', '')
+        if isinstance(final_answer, list):
+            final_answer = ' '.join(str(item) for item in final_answer)
+        
         return {
-            "answer": generation_result.answer or generation_result.text,
+            "answer": final_answer,
             "sources": sources,
-            "tokens_used": generation_result.tokens_used,
+            "tokens_used": getattr(generation_result, 'tokens_used', 0),
             "topic": extract_topic(message),
             "processing_time": time.time() - start_time,
             "search_results": len(search_results),
             "ranked_results": len(ranked_results),
             "model_info": {
-                "provider": generation_result.provider,
-                "model": generation_result.model_used,
-                "generation_time": generation_result.generation_time,
-                "model_config": generation_result.model_config
+                "provider": getattr(generation_result, 'provider', 'unknown'),
+                "model": getattr(generation_result, 'model_used', 'unknown'),
+                "generation_time": getattr(generation_result, 'generation_time', 0),
+                "model_config": getattr(generation_result, 'model_config', {})
             }
         }
         
