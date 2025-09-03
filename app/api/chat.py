@@ -291,6 +291,13 @@ async def execute_rag_pipeline(message: str, session_id: str, options: Dict[str,
             if raw_score < 0.15:
                 continue
                 
+            # 콘텐츠 안전하게 추출하여 문자열로 변환
+            doc_content = getattr(doc, 'content', '') or ''
+            if isinstance(doc_content, list):
+                doc_content = ' '.join(str(item) for item in doc_content)
+            elif not isinstance(doc_content, str):
+                doc_content = str(doc_content)
+            
             sources.append(Source(
                 id=index + 1,
                 document=metadata.get('source_file') or metadata.get('source') or 
@@ -298,7 +305,7 @@ async def execute_rag_pipeline(message: str, session_id: str, options: Dict[str,
                 page=metadata.get('page_number') or metadata.get('page'),
                 chunk=metadata.get('chunk_index') or metadata.get('chunk'),
                 relevance=raw_score,  # 정규화된 점수 그대로 사용
-                content_preview=(getattr(doc, 'content', '') or '')[:150] + '...'
+                content_preview=doc_content[:150] + '...' if doc_content else 'No content'
             ))
         
         # 안전한 방식으로 답변 추출
