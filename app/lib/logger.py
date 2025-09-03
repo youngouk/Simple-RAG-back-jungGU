@@ -17,7 +17,11 @@ class RAGLogger:
     
     def __init__(self):
         self.log_level = os.getenv("LOG_LEVEL", "INFO").upper()
-        self.log_dir = Path("/app/logs")  # Fixed: Use /app/logs instead of root /logs
+        # 로컬 환경과 Docker 환경 모두 지원
+        if os.path.exists("/app"):
+            self.log_dir = Path("/app/logs")
+        else:
+            self.log_dir = Path("./logs")
         self.log_dir.mkdir(exist_ok=True, parents=True)
         
         self._setup_logging()

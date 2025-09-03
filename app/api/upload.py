@@ -145,7 +145,8 @@ def estimate_processing_time(file_size: int, file_type: str) -> float:
         'txt': 3.0,     # 텍스트 파일은 빠름
         'md': 3.0,      # 마크다운도 빠름
         'html': 8.0,    # HTML 파싱 시간 포함
-        'csv': 12.0     # 구조화된 데이터 처리
+        'csv': 12.0,    # 구조화된 데이터 처리
+        'json': 5.0     # JSON 구조화된 데이터 파싱
     }
     
     ext = file_type.lower()
@@ -173,7 +174,8 @@ def validate_file(file: UploadFile) -> Dict[str, Any]:
         'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'xlsx',
         'text/csv': 'csv',
         'text/html': 'html',
-        'text/markdown': 'md'
+        'text/markdown': 'md',
+        'application/json': 'json'
     }
     
     # MIME 타입 검증
@@ -582,6 +584,11 @@ async def get_supported_types():
             "md": {
                 "mime_type": "text/markdown",
                 "description": "Markdown documents",
+                "max_size_mb": 10
+            },
+            "json": {
+                "mime_type": "application/json",
+                "description": "JSON documents",
                 "max_size_mb": 10
             }
         },
