@@ -23,9 +23,11 @@ class EnhancedSessionModule:
     
     def __init__(self, config: Dict[str, Any]):
         self.config = config
-        self.ttl = config.get('ttl', 3600)  # 기본 1시간
-        self.max_exchanges = config.get('max_exchanges', 5)  # 최대 교환 수
-        self.cleanup_interval = config.get('cleanup_interval', 300)  # 5분
+        # 세션 설정 (config.yaml의 session 섹션에서 가져옴)
+        session_config = config.get('session', {})
+        self.ttl = session_config.get('ttl', 7200)  # 기본 2시간 (config에서 7200으로 설정됨)
+        self.max_exchanges = session_config.get('max_exchanges', 10)  # 최대 교환 수 (config에서 10으로 설정됨)
+        self.cleanup_interval = session_config.get('cleanup_interval', 600)  # 10분으로 연장
         
         # LLM for summarization (API 키가 있는 경우에만 초기화)
         google_api_key = config.get('llm', {}).get('google', {}).get('api_key')
@@ -130,14 +132,18 @@ class EnhancedSessionModule:
         self.stats['total_sessions'] += 1
         self.stats['active_sessions'] += 1
         
-        logger.debug(f"Enhanced session created: {session_id}")
+        logger.info(f"세션 생성 및 저장 완료: {session_id}")
+        logger.debug(f"생성 후 세션 목록: {list(self.sessions.keys())}")
+        logger.debug(f"생성 후 전체 세션 수: {len(self.sessions)}")
         
         return {'session_id': session_id}
     
     async def get_session(self, session_id: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
         """세션 조회 - 개선된 버전"""
         if session_id not in self.sessions:
-            logger.debug(f"세션을 찾을 수 없음: {session_id}")
+            logger.warning(f"세션을 찾을 수 없음: {session_id}")
+            logger.debug(f"현재 세션 목록: {list(self.sessions.keys())}")
+            logger.debug(f"전체 세션 수: {len(self.sessions)}")
             return {
                 'is_valid': False,
                 'reason': 'session_not_found'

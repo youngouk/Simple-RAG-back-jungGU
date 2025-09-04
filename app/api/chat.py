@@ -131,11 +131,13 @@ async def handle_session(session_id: Optional[str], context: Dict[str, Any]) -> 
             
         if session_id:
             # 기존 세션 조회
+            logger.info(f"기존 세션 조회 시도: {session_id}")
+            logger.debug(f"세션 모듈의 현재 세션들: {list(session_module.sessions.keys())}")
             session_result = await session_module.get_session(session_id, context)
             
             if session_result.get("is_valid"):
                 # 중요: 원래 요청된 session_id를 유지!
-                logger.info(f"Session found and valid: {session_id}")
+                logger.info(f"✅ 세션 유효함: {session_id}")
                 return {
                     "success": True,
                     "session_id": session_id,  # 원본 session_id 사용
