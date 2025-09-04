@@ -78,8 +78,8 @@ reranking:
       max_tokens: 800
 
 session:
-  ttl: 3600
-  max_exchanges: 5
+  ttl: 7200  # 2시간으로 연장 (기존 1시간 → 2시간)
+  max_exchanges: 10  # 최대 교환 수도 증가 (5 → 10)
 
 logging:
   level: "DEBUG"

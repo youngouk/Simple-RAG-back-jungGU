@@ -102,12 +102,16 @@ class DocumentProcessor:
             # 파일 타입별 로더 호출
             documents = await self._load_by_type(file_path, file_type)
             
+            # 파일 크기 계산
+            file_size = file_path.stat().st_size
+            
             # 메타데이터 추가
             for i, doc in enumerate(documents):
                 doc.metadata.update({
                     'source_file': file_path.name,
                     'file_type': file_type,
                     'file_path': str(file_path),
+                    'file_size': file_size,
                     'chunk_index': i,
                     'total_chunks': len(documents),
                     'file_hash': self._get_file_hash(file_path),

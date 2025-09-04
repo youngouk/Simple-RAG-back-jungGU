@@ -844,16 +844,25 @@ Do not include any other text, explanation, or formatting. Only the JSON object.
             points, next_page_offset = scroll_result
             
             documents = []
+            unique_docs = {}  # 중복 제거를 위한 딕셔너리
+            
             for point in points:
                 metadata = point.payload['metadata']
-                documents.append({
-                    'id': str(point.id),
-                    'filename': metadata.get('source_file', 'unknown'),
-                    'file_type': metadata.get('file_type', 'unknown'),
-                    'file_size': metadata.get('file_size', 0),
-                    'upload_date': metadata.get('load_timestamp', 0),
-                    'chunk_count': metadata.get('total_chunks', 1)
-                })
+                doc_id = metadata.get('file_hash', str(point.id))
+                
+                # 중복 문서 체크 및 처리
+                if doc_id not in unique_docs:
+                    unique_docs[doc_id] = {
+                        'id': str(point.id),
+                        'filename': metadata.get('source_file', 'unknown'),
+                        'file_type': metadata.get('file_type', 'unknown'),
+                        'file_size': metadata.get('file_size', 0),
+                        'upload_date': metadata.get('load_timestamp', 0),
+                        'chunk_count': metadata.get('total_chunks', 1)
+                    }
+            
+            # 고유 문서들만 리스트에 추가
+            documents = list(unique_docs.values())
             
             return {
                 'documents': documents,

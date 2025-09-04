@@ -123,7 +123,7 @@ def get_request_context(request: Request) -> Dict[str, Any]:
     }
 
 async def handle_session(session_id: Optional[str], context: Dict[str, Any]) -> Dict[str, Any]:
-    """세션 처리"""
+    """세션 처리 - 개선된 버전"""
     try:
         session_module = modules.get('session')
         if not session_module:
@@ -134,21 +134,29 @@ async def handle_session(session_id: Optional[str], context: Dict[str, Any]) -> 
             session_result = await session_module.get_session(session_id, context)
             
             if session_result.get("is_valid"):
+                # 중요: 원래 요청된 session_id를 유지!
+                logger.info(f"Session found and valid: {session_id}")
                 return {
                     "success": True,
-                    "session_id": session_result.get("renewed_session_id", session_id),
+                    "session_id": session_id,  # 원본 session_id 사용
                     "is_new": False
                 }
             else:
-                logger.warning(f"Invalid session: {session_id}, reason: {session_result.get('reason')}")
+                logger.warning(f"세션 만료/없음: {session_id}, 이유: {session_result.get('reason', 'unknown')}")
+                # 세션이 만료되거나 없을 때 사용자에게 알림
+                logger.info(f"새 세션 생성 중... (기존 세션: {session_id})")
         
         # 새 세션 생성
         new_session = await session_module.create_session({"metadata": context})
+        new_session_id = new_session["session_id"]
+        
+        logger.info(f"새 세션 생성 완료: {new_session_id}")
         
         return {
             "success": True,
-            "session_id": new_session["session_id"],
-            "is_new": True
+            "session_id": new_session_id,
+            "is_new": True,
+            "message": "새 대화 세션이 시작되었습니다."
         }
         
     except Exception as e:

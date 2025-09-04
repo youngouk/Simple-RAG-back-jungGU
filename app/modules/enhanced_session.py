@@ -114,8 +114,9 @@ class EnhancedSessionModule:
         return {'session_id': session_id}
     
     async def get_session(self, session_id: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
-        """세션 조회"""
+        """세션 조회 - 개선된 버전"""
         if session_id not in self.sessions:
+            logger.debug(f"세션을 찾을 수 없음: {session_id}")
             return {
                 'is_valid': False,
                 'reason': 'session_not_found'
@@ -124,16 +125,20 @@ class EnhancedSessionModule:
         session = self.sessions[session_id]
         current_time = time.time()
         
-        # TTL 검사
-        if current_time - session['last_accessed'] > self.ttl:
+        # TTL 검사 (더 관대하게)
+        time_since_access = current_time - session['last_accessed']
+        if time_since_access > self.ttl:
+            logger.debug(f"세션 만료: {session_id}, 경과시간: {time_since_access:.0f}초 (TTL: {self.ttl}초)")
             await self.delete_session(session_id)
             return {
                 'is_valid': False,
-                'reason': 'session_expired'
+                'reason': 'session_expired',
+                'expired_time': time_since_access
             }
         
         # 마지막 접근 시간 업데이트
         session['last_accessed'] = current_time
+        logger.debug(f"세션 유효하고 업데이트됨: {session_id} (남은 시간: {self.ttl - time_since_access:.0f}초)")
         
         # 컨텍스트 정보 업데이트 (있는 경우)
         if context:
@@ -142,7 +147,8 @@ class EnhancedSessionModule:
         return {
             'is_valid': True,
             'session': session,
-            'renewed_session_id': session_id
+            'renewed_session_id': session_id,
+            'remaining_ttl': self.ttl - time_since_access
         }
     
     async def delete_session(self, session_id: str):
@@ -328,24 +334,42 @@ class EnhancedSessionModule:
                 logger.error(f"Session cleanup error: {e}")
     
     async def _extract_user_info(self, session: Dict[str, Any], message: str):
-        """메시지에서 사용자 정보 추출"""
-        # 이름 추출
+        """메시지에서 사용자 정보 추출 - 개선된 버전"""
+        # 이름 추출 패턴 확장
         name_patterns = [
             "내 이름은 ",
             "저는 ",
             "제 이름은 ",
             "나는 ",
+            "이름이 ",
+            " 입니다",  # "송영욱 입니다" 패턴
+            "이라고 합니다",
+            "라고 불러주세요",
         ]
         
+        # 더 유연한 이름 추출
+        import re
+        
+        # "저는 [이름] 입니다" 패턴
+        name_match = re.search(r'저는\s+([가-힣]+)\s*입니다', message)
+        if name_match:
+            name_candidate = name_match.group(1).strip()
+            if name_candidate and 1 < len(name_candidate) < 10:
+                session['user_name'] = name_candidate
+                session['facts']['이름'] = name_candidate
+                logger.info(f"이름 추출 (정규식): {name_candidate}")
+                return
+        
+        # 기존 패턴 방식도 유지
         for pattern in name_patterns:
             if pattern in message:
                 parts = message.split(pattern)
                 if len(parts) > 1:
-                    name_candidate = parts[1].split()[0].rstrip('이야입니다요.')
-                    if name_candidate and len(name_candidate) < 10:  # 합리적인 이름 길이
+                    name_candidate = parts[1].split()[0].rstrip('이야입니다요.').strip()
+                    if name_candidate and 1 < len(name_candidate) < 10:
                         session['user_name'] = name_candidate
                         session['facts']['이름'] = name_candidate
-                        logger.info(f"Extracted user name: {name_candidate}")
+                        logger.info(f"이름 추출 (패턴 매칭): {name_candidate}")
                         break
         
         # 기타 정보 추출 (나이, 직업 등)

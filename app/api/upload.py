@@ -229,9 +229,12 @@ async def process_document_background(job_id: str, file_path: Path, filename: st
         })
         save_upload_jobs(upload_jobs)
         
+        # 파일 크기 정보 포함하여 문서 로드
+        file_size = file_path.stat().st_size
         docs = await document_processor.load_document(str(file_path), {
             "source_file": filename,
-            "file_type": file_type
+            "file_type": file_type,
+            "original_file_size": file_size  # 원본 파일 크기 정보 추가
         })
         
         # 문서 분할
@@ -444,10 +447,11 @@ async def list_documents(page: int = 1, page_size: int = 20):
         documents = []
         for doc_data in documents_data.get("documents", []):
             # upload_date 처리: timestamp가 float인 경우 ISO 형식으로 변환
-            upload_date = doc_data.get("upload_date", datetime.now().timestamp())
-            if isinstance(upload_date, (int, float)):
+            upload_date = doc_data.get("upload_date", 0)
+            if isinstance(upload_date, (int, float)) and upload_date > 0:
                 upload_date = datetime.fromtimestamp(upload_date).isoformat()
-            elif not upload_date:
+            else:
+                # 유효하지 않은 timestamp인 경우 현재 시간 사용
                 upload_date = datetime.now().isoformat()
                 
             documents.append(DocumentInfo(
