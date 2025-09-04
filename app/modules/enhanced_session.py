@@ -27,12 +27,22 @@ class EnhancedSessionModule:
         self.max_exchanges = config.get('max_exchanges', 5)  # 최대 교환 수
         self.cleanup_interval = config.get('cleanup_interval', 300)  # 5분
         
-        # LLM for summarization
-        self.llm = ChatGoogleGenerativeAI(
-            model="gemini-2.0-flash-exp",
-            google_api_key=config.get('llm', {}).get('google', {}).get('api_key'),
-            temperature=0.3
-        )
+        # LLM for summarization (API 키가 있는 경우에만 초기화)
+        google_api_key = config.get('llm', {}).get('google', {}).get('api_key')
+        if google_api_key:
+            try:
+                self.llm = ChatGoogleGenerativeAI(
+                    model="gemini-2.0-flash-exp",
+                    google_api_key=google_api_key,
+                    temperature=0.3
+                )
+                logger.info("Google LLM initialized for session summarization")
+            except Exception as e:
+                logger.warning(f"Failed to initialize Google LLM: {e}")
+                self.llm = None
+        else:
+            logger.warning("Google API key not found, ConversationSummaryBufferMemory will be disabled")
+            self.llm = None
         
         # 인메모리 세션 저장소
         self.sessions: Dict[str, Dict[str, Any]] = {}
@@ -82,16 +92,27 @@ class EnhancedSessionModule:
         """새 세션 생성"""
         session_id = str(uuid4())
         
-        # LangChain memory 생성
-        memory = ConversationSummaryBufferMemory(
-            llm=self.llm,
-            max_token_limit=2000,
-            return_messages=True,
-            chat_memory=InMemoryChatMessageHistory(),
-            memory_key="chat_history",
-            input_key="human_input",
-            output_key="ai_output"
-        )
+        # LangChain memory 생성 (LLM이 있는 경우에만 ConversationSummaryBufferMemory 사용)
+        if self.llm:
+            memory = ConversationSummaryBufferMemory(
+                llm=self.llm,
+                max_token_limit=2000,
+                return_messages=True,
+                chat_memory=InMemoryChatMessageHistory(),
+                memory_key="chat_history",
+                input_key="human_input",
+                output_key="ai_output"
+            )
+        else:
+            # LLM이 없으면 기본 ConversationBufferWindowMemory 사용
+            memory = ConversationBufferWindowMemory(
+                k=10,  # 최근 10개 교환 유지
+                return_messages=True,
+                chat_memory=InMemoryChatMessageHistory(),
+                memory_key="chat_history",
+                input_key="human_input",
+                output_key="ai_output"
+            )
         
         session_data = {
             'session_id': session_id,

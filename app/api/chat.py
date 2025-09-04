@@ -147,10 +147,13 @@ async def handle_session(session_id: Optional[str], context: Dict[str, Any]) -> 
                 logger.info(f"새 세션 생성 중... (기존 세션: {session_id})")
         
         # 새 세션 생성
+        logger.debug(f"새 세션 생성 전 - 세션 모듈 ID: {id(session_module)}")
         new_session = await session_module.create_session({"metadata": context})
         new_session_id = new_session["session_id"]
         
         logger.info(f"새 세션 생성 완료: {new_session_id}")
+        logger.debug(f"새 세션 생성 후 - 전체 세션 수: {len(session_module.sessions)}")
+        logger.debug(f"새 세션 생성 후 - 세션 키 목록: {list(session_module.sessions.keys())}")
         
         return {
             "success": True,
@@ -216,8 +219,15 @@ async def execute_rag_pipeline(message: str, session_id: str, options: Dict[str,
         if not all([session_module, retrieval_module, generation_module]):
             raise Exception("Required modules not available")
         
-        # 1. 대화 컨텍스트 조회
+        # 1. 대화 컨텍스트 조회 - 디버깅 추가
         logger.debug("Step 1: Getting session context...")
+        
+        # 세션 상태 디버깅
+        logger.debug(f"세션 모듈 ID: {id(session_module)}")
+        logger.debug(f"전체 세션 수: {len(session_module.sessions)}")
+        logger.debug(f"세션 키 목록: {list(session_module.sessions.keys())}")
+        logger.debug(f"요청된 세션 ID: {session_id}")
+        
         context_string = await session_module.get_context_string(session_id)
         logger.debug("Session context retrieved", has_context=bool(context_string))
         
@@ -447,6 +457,11 @@ async def chat(request: Request, chat_request: ChatRequest):
         # 3. 세션에 대화 기록
         session_module = modules.get('session')
         if session_module:
+            logger.debug(f"대화 추가 전 - 세션 모듈 ID: {id(session_module)}")
+            logger.debug(f"대화 추가 전 - 전체 세션 수: {len(session_module.sessions)}")
+            logger.debug(f"대화 추가 전 - 세션 키 목록: {list(session_module.sessions.keys())}")
+            logger.debug(f"대화 추가할 세션 ID: {session_id}")
+            
             await session_module.add_conversation(
                 session_id,
                 chat_request.message,
