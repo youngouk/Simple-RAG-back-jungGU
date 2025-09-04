@@ -667,9 +667,8 @@ class RetrievalModule:
     async def _rerank_gpt5_nano(self, query: str, results: List[SearchResult], top_k: int) -> List[SearchResult]:
         """GPT-5-nano 기반 리랭킹 (고속 분류 작업 최적화)"""
         try:
-            # OpenAI 설정 가져오기
-            from ..config.config_manager import config
-            llm_config = config.get('llm', {}).get('openai', {})
+            # OpenAI 설정 가져오기 (인스턴스 config 사용)
+            llm_config = self.config.get('llm', {}).get('openai', {})
             
             if not llm_config.get('api_key'):
                 logger.warning("OpenAI API key not available for GPT-5-nano reranking")
