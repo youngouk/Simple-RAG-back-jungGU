@@ -285,9 +285,23 @@ async def execute_rag_pipeline(message: str, session_id: str, options: Dict[str,
                 try:
                     # 메타데이터 구조 분석
                     if index == 0:
+                        # 안전한 keys 추출
+                        doc_keys = None
+                        try:
+                            if hasattr(doc, 'keys'):
+                                # doc.keys()가 이미 리스트일 수 있으므로 안전하게 처리
+                                keys_obj = doc.keys()
+                                if isinstance(keys_obj, list):
+                                    doc_keys = keys_obj
+                                else:
+                                    doc_keys = list(keys_obj)
+                        except Exception as keys_error:
+                            logger.debug(f"Could not extract keys from document: {keys_error}")
+                            doc_keys = None
+                        
                         logger.info("Document metadata structure analysis",
                                    doc_type=type(doc).__name__,
-                                   doc_keys=list(doc.keys()) if hasattr(doc, 'keys') else None)
+                                   doc_keys=doc_keys)
                     
                     # 다양한 메타데이터 위치에서 정보 추출
                     original_doc = getattr(doc, '_original', doc)
