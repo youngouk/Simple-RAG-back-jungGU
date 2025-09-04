@@ -612,6 +612,8 @@ class RetrievalModule:
                 reranked_results = await self._rerank_cohere(query, search_results, top_k)
             elif provider == 'jina' and 'jina' in self.rerankers:
                 reranked_results = await self._rerank_jina(query, search_results, top_k)
+            elif provider == 'llm':
+                reranked_results = await self._rerank_gpt5_nano(query, search_results, top_k)
             else:
                 logger.warning(f"Reranker {provider} not available, skipping reranking")
                 return search_results
@@ -662,75 +664,106 @@ class RetrievalModule:
             logger.error(f"Cohere reranking failed: {e}")
             return results
     
-    async def _rerank_llm(self, query: str, results: List[SearchResult], top_k: int) -> List[SearchResult]:
-        """LLM 기반 리랭킹 (API 키 불필요)"""
+    async def _rerank_gpt5_nano(self, query: str, results: List[SearchResult], top_k: int) -> List[SearchResult]:
+        """GPT-5-nano 기반 리랭킹 (고속 분류 작업 최적화)"""
         try:
-            # LLM 설정 가져오기
+            # OpenAI 설정 가져오기
             from ..config.config_manager import config
-            llm_config = config.get('llm', {}).get('google', {})
+            llm_config = config.get('llm', {}).get('openai', {})
             
             if not llm_config.get('api_key'):
-                logger.warning("Google API key not available for LLM reranking")
+                logger.warning("OpenAI API key not available for GPT-5-nano reranking")
                 return results
             
-            # Google Generative AI 사용
-            import google.generativeai as genai
-            genai.configure(api_key=llm_config['api_key'])
-            model = genai.GenerativeModel('gemini-1.5-flash')  # 빠른 모델 사용
+            # OpenAI 클라이언트 사용
+            from openai import OpenAI
+            client = OpenAI(api_key=llm_config['api_key'])
             
-            # 리랭킹용 프롬프트 생성
+            # 리랭킹용 문서 및 프롬프트 생성
             documents_text = ""
-            for i, result in enumerate(results[:10]):  # 상위 10개만 리랭킹
-                documents_text += f"\n[{i}] {result.content[:200]}..."  # 200자로 제한
+            for i, result in enumerate(results[:12]):  # GPT-5-nano는 더 많은 문서 처리 가능
+                # 문서 내용을 더 길게 포함 (300자)
+                content_preview = result.content[:300].replace('\n', ' ')
+                documents_text += f"\n[{i}] {content_preview}..."
             
-            prompt = f"""다음 문서들을 쿼리에 대한 연관성 순서로 정렬하고, 각각에 0.0~1.0 사이의 점수를 매겨주세요.
+            # GPT-5-nano 최적화 프롬프트 (한국어 지원)
+            prompt = f"""당신은 문서 순위를 매기는 전문가입니다. 주어진 쿼리에 대해 문서들의 연관성을 평가하고 순위를 매겨주세요.
 
 쿼리: "{query}"
 
 문서들:
 {documents_text}
 
-최고 {top_k}개만 선택하여 JSON 형식으로 답변:
-{{"results": [{{"index": 0, "score": 0.9}}, {{"index": 2, "score": 0.7}}, ...]}}"""
+작업:
+1. 각 문서가 쿼리와 얼마나 관련이 있는지 0.0~1.0 점수로 평가
+2. 상위 {top_k}개 문서만 선택하여 연관성 순으로 정렬
+3. 점수 기준: 1.0=완벽히 일치, 0.8=매우 관련됨, 0.6=관련됨, 0.4=약간 관련됨, 0.2=거의 무관, 0.0=전혀 무관
+
+JSON 형식으로만 답변하세요:
+{{"results": [{{"index": 문서번호, "score": 점수, "reason": "간단한 이유"}}, ...]}}"""
             
-            # LLM 리랭킹 요청
+            # GPT-5-nano 리랭킹 요청 (분류 작업에 최적화된 설정)
+            logger.debug(f"Requesting GPT-5-nano reranking for {len(results)} documents")
             response = await asyncio.to_thread(
-                model.generate_content,
-                prompt,
-                generation_config=genai.types.GenerationConfig(
-                    max_output_tokens=1000,
-                    temperature=0.1  # 일관성 위해 낮은 temperature
-                )
+                client.chat.completions.create,
+                model="gpt-5-nano",  # 고속 분류/순위 작업용
+                messages=[{"role": "user", "content": prompt}],
+                max_completion_tokens=800,  # nano 모델용 파라미터
+                # GPT-5는 temperature가 고정되므로 설정하지 않음
             )
             
-            # JSON 결과 파싱
+            # 응답 파싱
+            response_content = response.choices[0].message.content.strip()
+            logger.debug(f"GPT-5-nano response: {response_content[:200]}...")
+            
+            # JSON 결과 추출 및 파싱
             import json
             import re
             
-            response_text = response.text.strip()
-            # JSON 부분만 추출
-            json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
+            # JSON 부분만 추출 (코드 블록이나 다른 텍스트 제거)
+            json_match = re.search(r'\{.*\}', response_content, re.DOTALL)
             if json_match:
-                rerank_data = json.loads(json_match.group())
-                
-                reranked_results = []
-                for item in rerank_data.get('results', [])[:top_k]:
-                    idx = item.get('index', 0)
-                    score = max(0.0, min(1.0, item.get('score', 0.5)))  # 0~1 범위 제한
+                try:
+                    rerank_data = json.loads(json_match.group())
                     
-                    if 0 <= idx < len(results):
-                        original_result = results[idx]
-                        original_result.score = score
-                        reranked_results.append(original_result)
-                
-                logger.info(f"LLM reranking completed: {len(reranked_results)} results")
-                return reranked_results
+                    reranked_results = []
+                    for item in rerank_data.get('results', [])[:top_k]:
+                        idx = item.get('index', 0)
+                        score = max(0.0, min(1.0, float(item.get('score', 0.5))))  # 0~1 범위 제한
+                        reason = item.get('reason', '')
+                        
+                        if 0 <= idx < len(results):
+                            original_result = results[idx]
+                            # 새로운 SearchResult 객체 생성 (원본 수정 방지)
+                            reranked_result = SearchResult(
+                                id=original_result.id,
+                                content=original_result.content,
+                                score=score,
+                                metadata=original_result.metadata
+                            )
+                            reranked_results.append(reranked_result)
+                            logger.debug(f"Reranked doc {idx}: score={score:.3f}, reason={reason}")
+                    
+                    # 점수순으로 정렬
+                    reranked_results.sort(key=lambda x: x.score, reverse=True)
+                    
+                    logger.info(f"GPT-5-nano reranking completed: {len(results)} -> {len(reranked_results)} results")
+                    
+                    # 상위 결과 로깅
+                    for i, result in enumerate(reranked_results[:3]):
+                        logger.info(f"Top {i+1}: score={result.score:.3f}, content: {result.content[:50]}...")
+                    
+                    return reranked_results
+                    
+                except json.JSONDecodeError as je:
+                    logger.error(f"Failed to parse GPT-5-nano JSON response: {je}")
+                    return results
             else:
-                logger.warning("Failed to parse LLM reranking response")
+                logger.warning("No JSON found in GPT-5-nano response")
                 return results
                 
         except Exception as e:
-            logger.error(f"LLM reranking failed: {e}")
+            logger.error(f"GPT-5-nano reranking failed: {e}")
             return results
     
     async def _rerank_jina(self, query: str, results: List[SearchResult], top_k: int) -> List[SearchResult]:

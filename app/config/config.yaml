@@ -73,8 +73,9 @@ reranking:
       endpoint: "https://api.jina.ai/v1/rerank"
     llm:
       enabled: true  # LLM 기반 리랭킹 활성화
-      provider: "google"  # Google Gemini 사용
-      max_tokens: 20000
+      provider: "openai"  # OpenAI GPT-5-nano 사용
+      model: "gpt-5-nano"  # 고속 분류/순위 작업 최적화
+      max_tokens: 800
 
 session:
   ttl: 3600
