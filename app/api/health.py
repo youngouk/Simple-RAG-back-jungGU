@@ -118,7 +118,7 @@ async def system_stats():
         return StatsResponse(
             uptime=uptime,
             uptime_human=format_uptime(uptime),
-            cpu_percent=psutil.cpu_percent(interval=1),
+            cpu_percent=psutil.cpu_percent(interval=0.1),
             memory_usage=get_memory_info(),
             disk_usage=get_disk_info(),
             system_info=get_system_info()

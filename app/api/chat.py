@@ -493,13 +493,25 @@ async def chat(request: Request, chat_request: ChatRequest):
         
         update_stats({"success": False})
         
+        # 사용자 친화적 오류 메시지 생성
+        error_message = str(error)
+        if "응답 시간이 초과" in error_message:
+            user_message = "AI 응답 시간이 초과되었습니다. 잠시 후 다시 시도해주세요."
+        elif "API" in error_message.upper() or "KEY" in error_message.upper():
+            user_message = "AI 서비스 연결에 문제가 있습니다. 관리자에게 문의해주세요."
+        elif "document" in error_message.lower() or "retrieval" in error_message.lower():
+            user_message = "문서 검색 중 오류가 발생했습니다. 질문을 다시 입력해주세요."
+        else:
+            user_message = "요청 처리 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요."
+        
         raise HTTPException(
             status_code=500,
             detail={
-                "error": "Internal server error",
-                "message": "Failed to process chat request",
+                "error": "처리 오류",
+                "message": user_message,
                 "session_id": session_id,
-                "timestamp": datetime.now().isoformat()
+                "timestamp": datetime.now().isoformat(),
+                "support_message": "문제가 지속되면 관리자에게 문의해주세요."
             }
         )
 

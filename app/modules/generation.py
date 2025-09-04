@@ -259,11 +259,14 @@ class GenerationModule:
                 'top_k': config.get('top_k', 40)
             }
             
-            # 생성 실행
-            response = await asyncio.to_thread(
-                model.generate_content,
-                prompt,
-                generation_config=genai.types.GenerationConfig(**generation_config)
+            # 생성 실행 (30초 타임아웃)
+            response = await asyncio.wait_for(
+                asyncio.to_thread(
+                    model.generate_content,
+                    prompt,
+                    generation_config=genai.types.GenerationConfig(**generation_config)
+                ),
+                timeout=30.0
             )
             
             # 토큰 사용량 추정 (Gemini는 정확한 토큰 카운트를 제공하지 않을 수 있음)
@@ -280,9 +283,12 @@ class GenerationModule:
                 model_config=generation_config
             )
             
+        except asyncio.TimeoutError:
+            logger.error("Gemini 응답 시간이 30초를 초과했습니다")
+            raise Exception("AI 응답 시간이 초과되었습니다. 잠시 후 다시 시도해주세요.")
         except Exception as e:
             logger.error(f"Gemini generation error: {e}")
-            raise
+            raise Exception(f"AI 응답 생성 중 오류가 발생했습니다: {str(e)}")
     
     async def _generate_openai(self, client_info: Dict[str, Any], prompt: str, 
                              options: Dict[str, Any]) -> GenerationResult:
@@ -326,12 +332,15 @@ class GenerationModule:
             
             logger.debug(f"OpenAI model {model_name} using config: {list(generation_config.keys())}")
             
-            # 생성 실행
-            response = await asyncio.to_thread(
-                client.chat.completions.create,
-                model=model_name,
-                messages=messages,
-                **generation_config
+            # 생성 실행 (30초 타임아웃)
+            response = await asyncio.wait_for(
+                asyncio.to_thread(
+                    client.chat.completions.create,
+                    model=model_name,
+                    messages=messages,
+                    **generation_config
+                ),
+                timeout=30.0
             )
             
             # 결과 추출
@@ -363,9 +372,12 @@ class GenerationModule:
                 model_config=generation_config
             )
             
+        except asyncio.TimeoutError:
+            logger.error("OpenAI 응답 시간이 30초를 초과했습니다")
+            raise Exception("AI 응답 시간이 초과되었습니다. 잠시 후 다시 시도해주세요.")
         except Exception as e:
             logger.error(f"OpenAI generation error: {e}")
-            raise
+            raise Exception(f"AI 응답 생성 중 오류가 발생했습니다: {str(e)}")
     
     async def _generate_claude(self, client_info: Dict[str, Any], prompt: str, 
                              options: Dict[str, Any]) -> GenerationResult:
@@ -381,13 +393,16 @@ class GenerationModule:
                 'temperature': config.get('temperature', 0.7)
             }
             
-            # 생성 실행
-            response = await asyncio.to_thread(
-                client.messages.create,
-                **generation_config,
-                messages=[
-                    {"role": "user", "content": prompt}
-                ]
+            # 생성 실행 (30초 타임아웃)
+            response = await asyncio.wait_for(
+                asyncio.to_thread(
+                    client.messages.create,
+                    **generation_config,
+                    messages=[
+                        {"role": "user", "content": prompt}
+                    ]
+                ),
+                timeout=30.0
             )
             
             # 결과 추출
@@ -404,9 +419,12 @@ class GenerationModule:
                 model_config=generation_config
             )
             
+        except asyncio.TimeoutError:
+            logger.error("Claude 응답 시간이 30초를 초과했습니다")
+            raise Exception("AI 응답 시간이 초과되었습니다. 잠시 후 다시 시도해주세요.")
         except Exception as e:
             logger.error(f"Claude generation error: {e}")
-            raise
+            raise Exception(f"AI 응답 생성 중 오류가 발생했습니다: {str(e)}")
     
     def _build_context(self, context_documents: List[Any]) -> str:
         """컨텍스트 텍스트 구성"""
@@ -438,7 +456,7 @@ class GenerationModule:
         
         # 기본 시스템 프롬프트
         system_prompt = self.prompts.get('system', """
-당신은 한국어로 답변하는 도움이 되는 AI 어시스턴트입니다.
+당신은 유저의 질문을 분석/판단하고, 질문에 부합하는 정보를 content 내에서 찾아 한국어로 답변하는 AI 어시스턴트입니다.
 제공된 문서 정보를 바탕으로 정확하고 유용한 답변을 제공해주세요.
 """).strip()
         

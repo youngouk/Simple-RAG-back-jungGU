@@ -184,18 +184,43 @@ async def root():
 @app.get("/api")
 async def api_info():
     """API 정보 엔드포인트"""
+    # 모듈 상태 확인
+    modules_status = {}
+    if hasattr(rag_app, 'modules') and rag_app.modules:
+        for module_name, module in rag_app.modules.items():
+            modules_status[module_name] = "활성화" if module else "비활성화"
+    
     return {
         "name": "RAG Chatbot API",
         "version": "2.0.0",
         "description": "경량 모듈형 한국어 RAG 챗봇 시스템",
+        "status": "운영 중",
+        "modules": modules_status,
+        "features": [
+            "다중 LLM 지원 (GPT-5, Claude, Gemini)",
+            "하이브리드 검색 (Dense + Sparse)",
+            "LLM 기반 리랭킹",
+            "세션 기반 대화 관리",
+            "다양한 문서 형식 지원"
+        ],
         "endpoints": {
-            "health": "/health",
-            "stats": "/stats",
-            "dashboard": "/dashboard",
-            "chat": "/api/chat",
-            "upload": "/api/upload",
-            "documents": "/api/upload/documents",
-            "admin": "/api/admin"
+            "건강 상태": "/health",
+            "시스템 통계": "/stats",
+            "대시보드": "/dashboard",
+            "채팅 API": "/api/chat",
+            "파일 업로드": "/api/upload",
+            "문서 관리": "/api/upload/documents",
+            "관리자": "/api/admin"
+        },
+        "usage": {
+            "chat_example": {
+                "url": "/api/chat",
+                "method": "POST",
+                "body": {
+                    "message": "안녕하세요, 질문이 있어요.",
+                    "session_id": "optional_session_id"
+                }
+            }
         }
     }
 

@@ -13,6 +13,7 @@ help:
 	@echo "update       - 의존성 업데이트"
 	@echo "run          - 프로덕션 서버 실행"
 	@echo "dev          - 개발 서버 실행 (자동 리로드)"
+	@echo "dev-fast     - 빠른 개발 서버 (로깅 최소화)"
 	@echo "test         - 테스트 실행"
 	@echo "lint         - 코드 린팅 (ruff)"
 	@echo "format       - 코드 포맷팅 (black + ruff)"
@@ -50,7 +51,11 @@ dev: install-dev
 
 # 개발 서버 실행 (uvicorn 직접 실행)
 dev-reload: install-dev
-	uv run uvicorn main:app --reload --host 0.0.0.0 --port 8000
+	uv run uvicorn main:app --reload --host 0.0.0.0 --port 8000 --reload-delay 0.25
+
+# 빠른 개발 서버 (로깅 최소화)
+dev-fast: install-dev
+	uv run uvicorn main:app --reload --host 0.0.0.0 --port 8000 --log-level warning --reload-delay 0.25
 
 # 테스트 실행 (UV 환경)
 test: install-dev
