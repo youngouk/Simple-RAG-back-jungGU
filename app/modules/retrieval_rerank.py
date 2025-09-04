@@ -685,21 +685,21 @@ class RetrievalModule:
                 content_preview = result.content[:300].replace('\n', ' ')
                 documents_text += f"\n[{i}] {content_preview}..."
             
-            # GPT-5-nano 최적화 프롬프트 (한국어 지원)
-            prompt = f"""당신은 문서 순위를 매기는 전문가입니다. 주어진 쿼리에 대해 문서들의 연관성을 평가하고 순위를 매겨주세요.
+            # GPT-5-nano 최적화 프롬프트 (더 명확한 JSON 지시)
+            prompt = f"""You are a document ranking expert. Evaluate and rank documents based on their relevance to the query.
 
-쿼리: "{query}"
+Query: "{query}"
 
-문서들:
+Documents:
 {documents_text}
 
-작업:
-1. 각 문서가 쿼리와 얼마나 관련이 있는지 0.0~1.0 점수로 평가
-2. 상위 {top_k}개 문서만 선택하여 연관성 순으로 정렬
-3. 점수 기준: 1.0=완벽히 일치, 0.8=매우 관련됨, 0.6=관련됨, 0.4=약간 관련됨, 0.2=거의 무관, 0.0=전혀 무관
+Task: Score each document from 0.0 to 1.0 based on relevance to the query.
+Select only the top {top_k} most relevant documents.
 
-JSON 형식으로만 답변하세요:
-{{"results": [{{"index": 문서번호, "score": 점수, "reason": "간단한 이유"}}, ...]}}"""
+IMPORTANT: Respond ONLY with valid JSON in this exact format:
+{{"results": [{{"index": 0, "score": 0.95}}, {{"index": 2, "score": 0.8}}, {{"index": 1, "score": 0.6}}]}}
+
+Do not include any other text, explanation, or formatting. Only the JSON object."""
             
             # GPT-5-nano 리랭킹 요청 (분류 작업에 최적화된 설정)
             logger.debug(f"Requesting GPT-5-nano reranking for {len(results)} documents")
@@ -713,53 +713,69 @@ JSON 형식으로만 답변하세요:
             
             # 응답 파싱
             response_content = response.choices[0].message.content.strip()
-            logger.debug(f"GPT-5-nano response: {response_content[:200]}...")
+            logger.info(f"GPT-5-nano raw response: {response_content}")  # 전체 응답 로깅
             
             # JSON 결과 추출 및 파싱
             import json
             import re
             
-            # JSON 부분만 추출 (코드 블록이나 다른 텍스트 제거)
-            json_match = re.search(r'\{.*\}', response_content, re.DOTALL)
-            if json_match:
-                try:
-                    rerank_data = json.loads(json_match.group())
+            # 다양한 JSON 추출 시도
+            # 1. 전체가 JSON인 경우
+            try:
+                rerank_data = json.loads(response_content)
+                logger.debug("Successfully parsed entire response as JSON")
+            except json.JSONDecodeError:
+                # 2. JSON 부분만 추출 (코드 블록이나 다른 텍스트 제거)
+                json_match = re.search(r'\{.*\}', response_content, re.DOTALL)
+                if json_match:
+                    try:
+                        rerank_data = json.loads(json_match.group())
+                        logger.debug("Successfully extracted and parsed JSON from response")
+                    except json.JSONDecodeError as je:
+                        logger.error(f"Failed to parse extracted JSON: {je}")
+                        logger.error(f"Extracted text: {json_match.group()[:500]}")
+                        # 폴백: 원본 결과 반환 (점수 기준 상위 top_k개)
+                        logger.info("Fallback: returning original results sorted by score")
+                        results.sort(key=lambda x: x.score, reverse=True)
+                        return results[:top_k]
+                else:
+                    logger.warning("No JSON pattern found in GPT-5-nano response")
+                    logger.warning(f"Response was: {response_content[:500]}")
+                    # 폴백: 원본 결과 반환
+                    results.sort(key=lambda x: x.score, reverse=True)
+                    return results[:top_k]
+            
+            # JSON 파싱 성공 시 결과 처리
+            if 'rerank_data' in locals():
+                reranked_results = []
+                for item in rerank_data.get('results', [])[:top_k]:
+                    idx = item.get('index', 0)
+                    score = max(0.0, min(1.0, float(item.get('score', 0.5))))  # 0~1 범위 제한
                     
-                    reranked_results = []
-                    for item in rerank_data.get('results', [])[:top_k]:
-                        idx = item.get('index', 0)
-                        score = max(0.0, min(1.0, float(item.get('score', 0.5))))  # 0~1 범위 제한
-                        reason = item.get('reason', '')
-                        
-                        if 0 <= idx < len(results):
-                            original_result = results[idx]
-                            # 새로운 SearchResult 객체 생성 (원본 수정 방지)
-                            reranked_result = SearchResult(
-                                id=original_result.id,
-                                content=original_result.content,
-                                score=score,
-                                metadata=original_result.metadata
-                            )
-                            reranked_results.append(reranked_result)
-                            logger.debug(f"Reranked doc {idx}: score={score:.3f}, reason={reason}")
-                    
-                    # 점수순으로 정렬
-                    reranked_results.sort(key=lambda x: x.score, reverse=True)
-                    
-                    logger.info(f"GPT-5-nano reranking completed: {len(results)} -> {len(reranked_results)} results")
-                    
-                    # 상위 결과 로깅
-                    for i, result in enumerate(reranked_results[:3]):
-                        logger.info(f"Top {i+1}: score={result.score:.3f}, content: {result.content[:50]}...")
-                    
-                    return reranked_results
-                    
-                except json.JSONDecodeError as je:
-                    logger.error(f"Failed to parse GPT-5-nano JSON response: {je}")
-                    return results
+                    if 0 <= idx < len(results):
+                        original_result = results[idx]
+                        # 새로운 SearchResult 객체 생성 (원본 수정 방지)
+                        reranked_result = SearchResult(
+                            id=original_result.id,
+                            content=original_result.content,
+                            score=score,
+                            metadata=original_result.metadata
+                        )
+                        reranked_results.append(reranked_result)
+                        logger.debug(f"Reranked doc {idx}: score={score:.3f}")
+                
+                # 점수순으로 정렬
+                reranked_results.sort(key=lambda x: x.score, reverse=True)
+                
+                logger.info(f"GPT-5-nano reranking completed: {len(results)} -> {len(reranked_results)} results")
+                
+                # 상위 결과 로깅
+                for i, result in enumerate(reranked_results[:3]):
+                    logger.debug(f"Top {i+1}: score={result.score:.3f}, content: {result.content[:50]}...")
+                
+                return reranked_results if reranked_results else results[:top_k]
             else:
-                logger.warning("No JSON found in GPT-5-nano response")
-                return results
+                return results[:top_k]
                 
         except Exception as e:
             logger.error(f"GPT-5-nano reranking failed: {e}")
