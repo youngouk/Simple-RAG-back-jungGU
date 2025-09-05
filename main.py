@@ -24,7 +24,7 @@ sys.path.append(str(app_dir))
 
 from app.lib.config_loader import ConfigLoader
 from app.lib.logger import get_logger
-from app.api import chat, upload, admin, health
+from app.api import chat, upload, admin, health, prompts
 from app.modules.enhanced_session import EnhancedSessionModule
 from app.modules.document_processing import DocumentProcessor
 from app.modules.retrieval_rerank import RetrievalModule
@@ -175,6 +175,7 @@ app.include_router(health.router, tags=["Health"])
 app.include_router(chat.router, prefix="/api", tags=["Chat"])
 app.include_router(upload.router, prefix="/api", tags=["Upload"])
 app.include_router(admin.router, prefix="/api", tags=["Admin"])
+app.include_router(prompts.router, tags=["Prompts"])
 
 @app.get("/")
 async def root():

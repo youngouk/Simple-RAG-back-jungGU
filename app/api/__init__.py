@@ -6,5 +6,6 @@ from . import chat
 from . import upload  
 from . import admin
 from . import health
+from . import prompts
 
-__all__ = ['chat', 'upload', 'admin', 'health']
+__all__ = ['chat', 'upload', 'admin', 'health', 'prompts']

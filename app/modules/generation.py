@@ -14,6 +14,7 @@ from anthropic import Anthropic
 from openai import OpenAI
 
 from ..lib.logger import get_logger
+from .prompt_manager import get_prompt_manager
 
 logger = get_logger(__name__)
 
@@ -49,8 +50,8 @@ class GenerationModule:
         self.auto_fallback = self.llm_config.get('auto_fallback', True)
         self.fallback_order = self.llm_config.get('fallback_order', ['google', 'openai', 'anthropic'])
         
-        # 프롬프트 설정
-        self.prompts = config.get('prompts', {})
+        # 프롬프트 매니저
+        self.prompt_manager = get_prompt_manager()
         
         # 통계
         self.stats = {
@@ -231,8 +232,8 @@ class GenerationModule:
         # 컨텍스트 구성
         context_text = self._build_context(context_documents)
         
-        # 프롬프트 구성
-        prompt = self._build_prompt(query, context_text, options)
+        # 프롬프트 구성 (비동기 호출로 변경)
+        prompt = await self._build_prompt(query, context_text, options)
         
         # 프로바이더별 생성
         if provider == 'google':
@@ -449,25 +450,31 @@ class GenerationModule:
         
         return "\n".join(context_parts)
     
-    def _build_prompt(self, query: str, context_text: str, options: Dict[str, Any]) -> str:
-        """프롬프트 구성"""
+    async def _build_prompt(self, query: str, context_text: str, options: Dict[str, Any]) -> str:
+        """프롬프트 구성 (동적 프롬프트 매니저 사용)"""
         style = options.get('style', 'standard')
         session_context = options.get('session_context', '')
         
-        # 기본 시스템 프롬프트
-        system_prompt = self.prompts.get('system', """
-당신은 유저의 질문을 분석/판단하고, 질문에 부합하는 정보를 content 내에서 찾아 한국어로 답변하는 AI 어시스턴트입니다.
-제공된 문서 정보를 바탕으로 정확하고 유용한 답변을 제공해주세요.
-""").strip()
-        
-        # 스타일별 프롬프트 조정
+        # 스타일에 따른 프롬프트 이름 결정
+        prompt_name = 'system'  # 기본값
         if style == 'detailed':
-            system_prompt += "\n자세하고 포괄적인 답변을 제공해주세요."
+            prompt_name = 'detailed'
         elif style == 'concise':
-            system_prompt += "\n간결하고 요점만 정리한 답변을 제공해주세요."
+            prompt_name = 'concise'
+        elif style == 'professional':
+            prompt_name = 'professional'
+        elif style == 'educational':
+            prompt_name = 'educational'
+        
+        # 프롬프트 매니저에서 동적으로 프롬프트 가져오기
+        system_prompt = await self.prompt_manager.get_prompt_content(
+            name=prompt_name,
+            default="""당신은 유저의 질문을 분석/판단하고, 질문에 부합하는 정보를 content 내에서 찾아 한국어로 답변하는 AI 어시스턴트입니다.
+제공된 문서 정보를 바탕으로 정확하고 유용한 답변을 제공해주세요."""
+        )
         
         # 프롬프트 조합
-        prompt_parts = [system_prompt]
+        prompt_parts = [system_prompt.strip()]
         
         if session_context:
             prompt_parts.append(f"\n이전 대화 맥락:\n{session_context}\n")
