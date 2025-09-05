@@ -17,6 +17,7 @@ logger = get_logger(__name__)
 
 router = APIRouter(prefix="/api/prompts", tags=["prompts"])
 
+@router.get("", response_model=PromptListResponse)
 @router.get("/", response_model=PromptListResponse)
 async def list_prompts(
     category: Optional[str] = Query(None, description="카테고리 필터"),
@@ -102,6 +103,7 @@ async def get_prompt_by_name(name: str):
             detail=str(e)
         )
 
+@router.post("", response_model=PromptResponse, status_code=status.HTTP_201_CREATED)
 @router.post("/", response_model=PromptResponse, status_code=status.HTTP_201_CREATED)
 async def create_prompt(prompt_data: PromptCreate):
     """
