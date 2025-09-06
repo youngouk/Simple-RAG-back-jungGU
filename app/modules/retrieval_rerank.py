@@ -11,7 +11,7 @@ import numpy as np
 # Qdrant client
 from qdrant_client import QdrantClient
 from qdrant_client.models import (
-    VectorParams, Distance, CollectionInfo,
+    VectorParams, Distance, CollectionInfo, SparseVectorParams,
     PointStruct, Filter, FieldCondition, MatchValue,
     ScoredPoint, SparseVector, NamedVector,
     FusionQuery, Fusion, NearestQuery, Prefetch
@@ -167,14 +167,20 @@ class RetrievalModule:
                 )
                 dense_vector_size = len(test_embedding)
                 
-                # 벡터 설정 구성 (안전한 딕셔너리 구조)
-                vectors_config = VectorParams(
-                    size=dense_vector_size,
-                    distance=Distance.COSINE
-                )
+                # 벡터 설정 구성 (하이브리드 지원)
+                vectors_config = {
+                    "dense": VectorParams(
+                        size=dense_vector_size,
+                        distance=Distance.COSINE
+                    )
+                }
                 
-                # 하이브리드는 일단 비활성화 (단순화)
-                logger.info(f"Creating collection with dense vectors (size: {dense_vector_size})")
+                # Sparse 벡터 추가 (하이브리드 활성화된 경우)
+                if self.hybrid_enabled:
+                    vectors_config["sparse"] = SparseVectorParams()
+                    logger.info(f"Creating hybrid collection: dense({dense_vector_size}) + sparse vectors")
+                else:
+                    logger.info(f"Creating collection with dense vectors only (size: {dense_vector_size})")
                 
                 # 컬렉션 생성
                 await asyncio.to_thread(
@@ -1039,11 +1045,20 @@ Do not include any other text, explanation, or formatting. Only the JSON object.
                     )
                     dense_size = len(test_embedding)
                     
-                    # 벡터 설정 구성 (안전한 구조)
-                    vectors_config = VectorParams(
-                        size=dense_size,
-                        distance=Distance.COSINE
-                    )
+                    # 벡터 설정 구성 (하이브리드 지원)
+                    vectors_config = {
+                        "dense": VectorParams(
+                            size=dense_size,
+                            distance=Distance.COSINE
+                        )
+                    }
+                    
+                    # Sparse 벡터 추가 (하이브리드 활성화된 경우)
+                    if self.hybrid_enabled:
+                        vectors_config["sparse"] = SparseVectorParams()
+                        logger.info(f"Manual collection creation with hybrid support: dense({dense_size}) + sparse")
+                    else:
+                        logger.info(f"Manual collection creation with dense only (size: {dense_size})")
                     
                     # 수동으로 컬렉션 생성
                     await asyncio.to_thread(
