@@ -1,7 +1,7 @@
-# Production Configuration
+# Enhanced RAG Configuration with Integrated Improvements
 app:
-  name: "RAG Chatbot"
-  version: "2.0.0"
+  name: "Enhanced RAG Chatbot"
+  version: "3.0.0"
   debug: false
 
 server:
@@ -45,19 +45,59 @@ llm:
     temperature: 0.3
     max_tokens: 10000
 
+# 강화된 문서 처리 설정 
 document_processing:
-  splitter_type: "recursive"
-  chunk_size: 400
-  chunk_overlap: 50
-  max_file_size: 52428800  # 50MB
+  # 시멘틱 청킹 설정 (새로 추가)
+  splitter_type: "semantic"  # recursive, semantic, hybrid 중 선택
+  target_chunk_size: 1250     # 목표 청크 크기 (1,000-1,500자 중간값)
+  min_chunk_size: 1000        # 최소 청크 크기  
+  max_chunk_size: 1500        # 최대 청크 크기
+  
+  # 시멘틱 분할 고급 설정
+  semantic_threshold: 0.3     # 의미적 분할 임계값 (0.0-1.0)
+  overlap_sentences: 2        # 오버랩할 문장 수
+  sentence_window: 3          # 의미 분석 윈도우 크기
+  preserve_structure: true    # 문서 구조 보존 여부
+  korean_optimized: true      # 한국어 최적화 활성화
+  
+  # 기존 설정 (호환성 유지)
+  chunk_size: 1250           # semantic chunking 사용 시 target_chunk_size와 동일
+  chunk_overlap: 100         # semantic chunking 사용 시 자동 계산
+  max_file_size: 52428800    # 50MB
 
+# 강화된 검색 설정
 retrieval:
-  max_sources: 25  # 검색 결과 수 증가 (20 -> 25)
-  min_score: 0.15  # 유사도 임계값 15%로 설정
-  top_k: 10       # 리랭킹 후 최종 10개 문서
-  enable_reranking: true   # 리랭킹 활성화
-  quality_threshold: 0.15  # 품질 검증 임계값 15%
-  deduplication_enabled: true  # 중복 제거 활성화
+  max_sources: 25
+  min_score: 0.15            # 기본 임계값 (동적 임계값 비활성화 시)
+  top_k: 10
+  enable_reranking: true
+  quality_threshold: 0.15
+  deduplication_enabled: true
+  
+  # 동적 임계값 설정 (새로 추가)
+  enable_dynamic_threshold: true
+  dynamic_threshold:
+    base_threshold: 0.15      # 시작 임계값
+    target_min_results: 5     # 목표 최소 결과 수
+    threshold_levels: [0.15, 0.10, 0.05, 0.01]  # 임계값 단계
+    learning_enabled: true    # 학습 기반 최적화
+    cache_enabled: true       # 캐싱 활성화
+    cache_ttl: 1800          # 캐시 TTL (30분)
+  
+  # GPT-5 쿼리 확장 설정 (새로 추가)  
+  enable_query_expansion: true
+  query_expansion:
+    model: "gpt-5-nano"       # GPT-5 nano 모델 사용
+    temperature: 0.3          # 창의성 조절
+    max_tokens: 1000          # 최대 토큰 수
+    cache_ttl: 3600          # 캐시 TTL (1시간)
+    min_query_length: 10      # 확장 대상 최소 쿼리 길이
+    max_synonyms: 5           # 최대 동의어 수
+    expansion_strategies:     # 확장 전략
+      - "synonym"             # 동의어 확장
+      - "intent"              # 의도 분석
+      - "keyword"             # 핵심 키워드 추출
+    fallback_enabled: true    # 실패 시 원본 쿼리 사용
 
 reranking:
   enabled: true
@@ -89,3 +129,10 @@ uploads:
   directory: "./uploads"
   max_file_size: 52428800
   allowed_types: [".pdf", ".txt", ".md", ".docx", ".xlsx", ".json"]
+
+# 시스템 모니터링 설정 (새로 추가)
+monitoring:
+  enable_stats_tracking: true
+  stats_reset_interval: 86400  # 24시간
+  performance_logging: true
+  component_health_checks: true
