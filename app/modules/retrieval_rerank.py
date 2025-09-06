@@ -140,12 +140,27 @@ class RetrievalModule:
         logger.info("Qdrant connection test successful")
     
     async def _init_sparse_embedder(self):
-        """Sparse embedder 초기화"""
+        """Sparse embedder 초기화 (BM42 모델 사용)"""
         try:
-            sparse_model = self.embeddings_config.get('sparse_model', 'Qdrant/bm42-all-minilm-l6-v2-attentions')
-            self.sparse_embedder = SparseTextEmbedding(model_name=sparse_model)
-            self.hybrid_enabled = True
-            logger.info(f"Sparse embedder initialized: {sparse_model}")
+            if not self.sparse_embedding_config.get('enabled', False):
+                logger.info("Sparse embeddings disabled in config")
+                self.sparse_embedder = None
+                self.hybrid_enabled = False
+                return
+            
+            model_id = self.sparse_embedding_config.get('model', "Qdrant/bm42-all-minilm-l6-v2-attentions")
+            from fastembed import SparseTextEmbedding
+            
+            self.sparse_embedder = SparseTextEmbedding(
+                model_name=model_id,
+                cache_dir="models/sparse"
+            )
+            
+            # 임시로 하이브리드를 비활성화하지만 임베더는 준비
+            # Qdrant API 호환성을 위해 단순한 구조로 시작
+            self.hybrid_enabled = False  # 나중에 활성화 예정
+            logger.info(f"Sparse embedder initialized but hybrid mode temporarily disabled: {model_id}")
+            
         except Exception as e:
             logger.warning(f"Failed to initialize sparse embedder: {e}")
             self.sparse_embedder = None
@@ -167,20 +182,13 @@ class RetrievalModule:
                 )
                 dense_vector_size = len(test_embedding)
                 
-                # 벡터 설정 구성 (하이브리드 지원)
-                vectors_config = {
-                    "dense": VectorParams(
-                        size=dense_vector_size,
-                        distance=Distance.COSINE
-                    )
-                }
-                
-                # Sparse 벡터 추가 (하이브리드 활성화된 경우)
-                if self.hybrid_enabled:
-                    vectors_config["sparse"] = SparseVectorParams()
-                    logger.info(f"Creating hybrid collection: dense({dense_vector_size}) + sparse vectors")
-                else:
-                    logger.info(f"Creating collection with dense vectors only (size: {dense_vector_size})")
+                # 벡터 설정 - 간단한 dense-only 구조로 시작
+                # 하이브리드 지원은 별도 작업으로 추가 예정
+                vectors_config = VectorParams(
+                    size=dense_vector_size,
+                    distance=Distance.COSINE
+                )
+                logger.info(f"Creating collection with dense vectors (size: {dense_vector_size})")
                 
                 # 컬렉션 생성
                 await asyncio.to_thread(
@@ -189,7 +197,7 @@ class RetrievalModule:
                     vectors_config=vectors_config
                 )
                 
-                logger.info(f"Collection {self.collection_name} created with dense size {dense_vector_size} and hybrid support")
+                logger.info(f"Collection {self.collection_name} created successfully with dense vectors")
             else:
                 logger.info(f"Collection {self.collection_name} already exists")
                 
@@ -244,6 +252,50 @@ class RetrievalModule:
         except Exception as e:
             logger.warning(f"Failed to update collection stats: {e}")
     
+    async def _ensure_hybrid_collection_compatibility(self):
+        """하이브리드 벡터 지원을 위한 컬렉션 호환성 확인 및 재생성"""
+        try:
+            # 컬렉션 정보 조회
+            collection_info = await asyncio.to_thread(
+                self.qdrant_client.get_collection, self.collection_name
+            )
+            
+            # vectors_config에서 sparse 벡터 설정 확인
+            vectors_config = collection_info.config.params.vectors
+            
+            # sparse 벡터가 없으면 컬렉션 재생성
+            if isinstance(vectors_config, dict) and "sparse" not in vectors_config:
+                logger.warning("Existing collection doesn't support sparse vectors. Recreating collection with hybrid support...")
+                
+                # 기존 컬렉션 삭제
+                await asyncio.to_thread(
+                    self.qdrant_client.delete_collection, self.collection_name
+                )
+                
+                # 하이브리드 지원 컬렉션으로 재생성
+                await self._init_collection()
+                
+                logger.info("Collection recreated with hybrid vector support")
+                
+            elif not isinstance(vectors_config, dict) and self.hybrid_enabled:
+                # VectorParams 단일 객체인 경우 (dense only) 
+                logger.warning("Collection has single vector config, but hybrid mode is enabled. Recreating...")
+                
+                # 기존 컬렉션 삭제
+                await asyncio.to_thread(
+                    self.qdrant_client.delete_collection, self.collection_name
+                )
+                
+                # 하이브리드 지원 컬렉션으로 재생성
+                await self._init_collection()
+                
+                logger.info("Collection recreated with hybrid vector support")
+                
+        except Exception as e:
+            logger.error(f"Failed to ensure hybrid collection compatibility: {e}")
+            # 오류 발생시에도 업로드는 계속 시도 (sparse 벡터만 제외)
+            pass
+    
     async def add_documents(self, embedded_chunks: List[Dict[str, Any]]) -> bool:
         """문서 추가 (하이브리드 벡터 지원)"""
         if not embedded_chunks:
@@ -252,6 +304,10 @@ class RetrievalModule:
         try:
             logger.info(f"Adding {len(embedded_chunks)} documents to collection")
             
+            # 하이브리드 모드이지만 기존 컬렉션이 sparse vector를 지원하지 않는 경우 체크
+            if self.hybrid_enabled and any('sparse_embedding' in chunk for chunk in embedded_chunks):
+                await self._ensure_hybrid_collection_compatibility()
+            
             # Point 객체 생성
             points = []
             for i, chunk in enumerate(embedded_chunks):
@@ -259,16 +315,9 @@ class RetrievalModule:
                 import uuid
                 point_id = str(uuid.uuid4())
                 
-                # 벡터 구성
-                vectors = {"dense": chunk['dense_embedding']}
-                
-                # Sparse 벡터 추가 (있는 경우)
-                if 'sparse_embedding' in chunk and self.hybrid_enabled:
-                    sparse_data = chunk['sparse_embedding']
-                    vectors["sparse"] = SparseVector(
-                        indices=sparse_data['indices'],
-                        values=sparse_data['values']
-                    )
+                # 벡터 구성 - 현재 dense만 사용
+                # 하이브리드 모드가 비활성화된 상태이므로 dense만 사용
+                vectors = chunk['dense_embedding']  # 단순 dense 벡터로 설정
                 
                 points.append(PointStruct(
                     id=point_id,
@@ -279,18 +328,26 @@ class RetrievalModule:
                     }
                 ))
             
-            # 배치로 업로드
+            # 배치로 업로드 - sparse vector 오류 감지 및 복구
             batch_size = self.qdrant_config.get('batch_size', 100)
             for i in range(0, len(points), batch_size):
                 batch = points[i:i + batch_size]
                 
-                await asyncio.to_thread(
-                    self.qdrant_client.upsert,
-                    collection_name=self.collection_name,
-                    points=batch
-                )
-                
-                logger.debug(f"Uploaded batch {i//batch_size + 1}/{math.ceil(len(points)/batch_size)}")
+                try:
+                    await asyncio.to_thread(
+                        self.qdrant_client.upsert,
+                        collection_name=self.collection_name,
+                        points=batch
+                    )
+                    
+                    logger.debug(f"Uploaded batch {i//batch_size + 1}/{math.ceil(len(points)/batch_size)}")
+                    
+                except Exception as upsert_error:
+                    error_msg = str(upsert_error)
+                    
+                    # 오류 로깅 및 전파
+                    logger.error(f"Failed to upload batch {i//batch_size + 1}: {error_msg}")
+                    raise upsert_error
             
             # 통계 업데이트
             await self._update_collection_stats()
