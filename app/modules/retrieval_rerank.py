@@ -1019,55 +1019,55 @@ Do not include any other text, explanation, or formatting. Only the JSON object.
             try:
                 logger.info("Attempting collection recreation method...")
                 
-                # 현재 컬렉션 설정 조회
-                collection_info = await asyncio.to_thread(
-                    self.qdrant_client.get_collection, self.collection_name
-                )
-                
-                # 컬렉션 삭제
+                # 먼저 컬렉션 삭제
                 await asyncio.to_thread(
                     self.qdrant_client.delete_collection, self.collection_name
                 )
                 logger.info("Original collection deleted successfully")
                 
-                # 컬렉션 재생성
-                vector_config = collection_info.config.params.vectors
-                
-                # Dense 벡터 설정
-                dense_config = VectorParams(
-                    size=vector_config["text"].size,
-                    distance=Distance.COSINE
-                )
-                
-                vectors_config = {"text": dense_config}
-                
-                # Sparse 벡터 설정 (하이브리드 검색 활성화된 경우)
-                if self.hybrid_enabled:
-                    from qdrant_client.models import SparseVectorParams
-                    vectors_config["sparse"] = SparseVectorParams()
-                
-                # 새 컬렉션 생성
-                await asyncio.to_thread(
-                    self.qdrant_client.create_collection,
-                    collection_name=self.collection_name,
-                    vectors_config=vectors_config
-                )
-                logger.info("New collection created successfully")
-                
+                # 기본 설정으로 컬렉션 재생성 (가장 안전한 방법)
+                await self._init_collection()
                 collection_recreated = True
+                logger.info("Collection recreated with default settings")
                 
             except Exception as recreation_error:
                 logger.error(f"Collection recreation failed: {recreation_error}")
                 
                 # 컬렉션이 삭제되었지만 재생성 실패한 경우
-                # 기본 설정으로 컬렉션 재생성 시도
+                # 수동으로 기본 컬렉션 생성 시도
                 try:
-                    logger.warning("Attempting to create collection with default settings...")
-                    await self._init_collection()
+                    logger.warning("Attempting manual collection creation...")
+                    
+                    # 기본 벡터 설정으로 생성
+                    test_embedding = await asyncio.to_thread(
+                        self.embedder.embed_query, "test"
+                    )
+                    dense_size = len(test_embedding)
+                    
+                    vectors_config = {
+                        "dense": VectorParams(
+                            size=dense_size,
+                            distance=Distance.COSINE
+                        )
+                    }
+                    
+                    # Sparse 벡터 추가 (하이브리드 활성화된 경우)
+                    if self.hybrid_enabled:
+                        from qdrant_client.models import SparseVectorParams
+                        vectors_config["sparse"] = SparseVectorParams()
+                    
+                    # 수동으로 컬렉션 생성
+                    await asyncio.to_thread(
+                        self.qdrant_client.create_collection,
+                        collection_name=self.collection_name,
+                        vectors_config=vectors_config
+                    )
+                    
                     collection_recreated = True
-                    logger.info("Collection recreated with default settings")
-                except Exception as init_error:
-                    logger.error(f"Default collection creation also failed: {init_error}")
+                    logger.info("Manual collection creation successful")
+                    
+                except Exception as manual_error:
+                    logger.error(f"Manual collection creation also failed: {manual_error}")
                     # 컬렉션 재생성 실패했지만 문서는 이미 삭제됨
                     collection_recreated = False
             
