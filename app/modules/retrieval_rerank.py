@@ -1006,89 +1006,137 @@ Do not include any other text, explanation, or formatting. Only the JSON object.
             
             logger.warning(f"Deleting all documents from collection: {self.collection_name}")
             
-            # 방법 1: 컬렉션 재생성 (가장 확실한 방법)
-            # 현재 컬렉션 설정 조회
-            collection_info = await asyncio.to_thread(
-                self.qdrant_client.get_collection, self.collection_name
-            )
+            # 현재 문서 수 확인 (삭제 전)
+            initial_stats = await self.get_stats()
+            initial_docs = initial_stats.get('total_documents', 0)
             
-            # 컬렉션 삭제
-            await asyncio.to_thread(
-                self.qdrant_client.delete_collection, self.collection_name
-            )
+            if initial_docs == 0:
+                logger.info("No documents to delete - collection is already empty")
+                return True
             
-            # 컬렉션 재생성
-            vector_config = collection_info.config.params.vectors
+            # 방법 1: 컬렉션 재생성 시도
+            collection_recreated = False
+            try:
+                logger.info("Attempting collection recreation method...")
+                
+                # 현재 컬렉션 설정 조회
+                collection_info = await asyncio.to_thread(
+                    self.qdrant_client.get_collection, self.collection_name
+                )
+                
+                # 컬렉션 삭제
+                await asyncio.to_thread(
+                    self.qdrant_client.delete_collection, self.collection_name
+                )
+                logger.info("Original collection deleted successfully")
+                
+                # 컬렉션 재생성
+                vector_config = collection_info.config.params.vectors
+                
+                # Dense 벡터 설정
+                dense_config = VectorParams(
+                    size=vector_config["text"].size,
+                    distance=Distance.COSINE
+                )
+                
+                vectors_config = {"text": dense_config}
+                
+                # Sparse 벡터 설정 (하이브리드 검색 활성화된 경우)
+                if self.hybrid_enabled:
+                    from qdrant_client.models import SparseVectorParams
+                    vectors_config["sparse"] = SparseVectorParams()
+                
+                # 새 컬렉션 생성
+                await asyncio.to_thread(
+                    self.qdrant_client.create_collection,
+                    collection_name=self.collection_name,
+                    vectors_config=vectors_config
+                )
+                logger.info("New collection created successfully")
+                
+                collection_recreated = True
+                
+            except Exception as recreation_error:
+                logger.error(f"Collection recreation failed: {recreation_error}")
+                
+                # 컬렉션이 삭제되었지만 재생성 실패한 경우
+                # 기본 설정으로 컬렉션 재생성 시도
+                try:
+                    logger.warning("Attempting to create collection with default settings...")
+                    await self._init_collection()
+                    collection_recreated = True
+                    logger.info("Collection recreated with default settings")
+                except Exception as init_error:
+                    logger.error(f"Default collection creation also failed: {init_error}")
+                    # 컬렉션 재생성 실패했지만 문서는 이미 삭제됨
+                    collection_recreated = False
             
-            # Dense 벡터 설정
-            dense_config = VectorParams(
-                size=vector_config["text"].size,
-                distance=Distance.COSINE
-            )
+            # 방법 2: Fallback - 컬렉션이 여전히 존재하고 포인트가 있다면 개별 삭제
+            if not collection_recreated:
+                try:
+                    logger.warning("Collection recreation failed, attempting individual point deletion...")
+                    
+                    # 컬렉션 존재 여부 확인
+                    await asyncio.to_thread(
+                        self.qdrant_client.get_collection, self.collection_name
+                    )
+                    
+                    # 모든 포인트 ID 조회
+                    search_results = await asyncio.to_thread(
+                        self.qdrant_client.scroll,
+                        collection_name=self.collection_name,
+                        limit=10000,  # 최대 10,000개씩
+                        with_payload=False,
+                        with_vectors=False
+                    )
+                    
+                    points = search_results[0]
+                    
+                    if points:
+                        point_ids = [point.id for point in points]
+                        
+                        # 일괄 삭제
+                        await asyncio.to_thread(
+                            self.qdrant_client.delete,
+                            collection_name=self.collection_name,
+                            points_selector=point_ids
+                        )
+                        
+                        logger.info(f"Fallback deletion completed: {len(point_ids)} points deleted")
+                    else:
+                        logger.info("No points found for individual deletion")
+                        
+                except Exception as fallback_error:
+                    logger.warning(f"Fallback deletion failed (expected if collection was already deleted): {fallback_error}")
+                    # 컬렉션이 이미 삭제되었다면 이것은 정상적인 상황
             
-            vectors_config = {"text": dense_config}
-            
-            # Sparse 벡터 설정 (하이브리드 검색 활성화된 경우)
-            if self.hybrid_enabled:
-                from qdrant_client.models import SparseVectorParams
-                vectors_config["sparse"] = SparseVectorParams()
-            
-            # 새 컬렉션 생성
-            await asyncio.to_thread(
-                self.qdrant_client.create_collection,
-                collection_name=self.collection_name,
-                vectors_config=vectors_config
-            )
-            
-            # 통계 재설정
+            # 통계 재설정 및 최종 확인
             self.stats.update({
                 'total_documents': 0,
                 'vector_count': 0
             })
             
-            logger.info(f"Successfully deleted all documents and recreated collection: {self.collection_name}")
-            return True
+            # 실제 삭제 확인
+            try:
+                final_stats = await self.get_stats()
+                final_docs = final_stats.get('total_documents', 0)
+                
+                if final_docs == 0:
+                    logger.info(f"✅ All documents successfully deleted: {initial_docs} → 0")
+                    return True
+                else:
+                    logger.warning(f"⚠️ Partial deletion: {initial_docs} → {final_docs} documents remaining")
+                    return False
+                    
+            except Exception as stats_error:
+                logger.warning(f"Could not verify final deletion status: {stats_error}")
+                # 통계 확인에 실패해도 삭제 작업 자체는 성공했을 수 있음
+                logger.info(f"Deletion process completed (initial documents: {initial_docs})")
+                return True
             
         except Exception as e:
-            logger.error(f"Failed to delete all documents: {e}")
-            
-            # 방법 2: Fallback - 모든 포인트 개별 삭제 시도
-            try:
-                logger.warning("Attempting fallback: deleting all points individually")
-                
-                # 모든 포인트 ID 조회
-                from qdrant_client.models import Filter
-                
-                search_results = await asyncio.to_thread(
-                    self.qdrant_client.scroll,
-                    collection_name=self.collection_name,
-                    limit=10000,  # 최대 10,000개씩
-                    with_payload=False,
-                    with_vectors=False
-                )
-                
-                points = search_results[0]
-                
-                if points:
-                    point_ids = [point.id for point in points]
-                    
-                    # 일괄 삭제
-                    await asyncio.to_thread(
-                        self.qdrant_client.delete,
-                        collection_name=self.collection_name,
-                        points_selector=point_ids
-                    )
-                    
-                    logger.info(f"Fallback deletion completed: {len(point_ids)} points deleted")
-                
-                # 통계 업데이트
-                await self._update_collection_stats()
-                
-                return True
-                
-            except Exception as fallback_error:
-                logger.error(f"Fallback deletion also failed: {fallback_error}")
-                raise Exception(f"All deletion methods failed. Original: {e}, Fallback: {fallback_error}")
+            logger.error(f"Delete all documents failed completely: {e}")
+            raise Exception(f"Failed to delete documents: {e}")
     
     async def recreate_collection(self):
         """컬렉션 재생성 (개발/디버그용)"""
