@@ -24,7 +24,7 @@ sys.path.append(str(app_dir))
 
 from app.lib.config_loader import ConfigLoader
 from app.lib.logger import get_logger
-from app.api import chat, upload, admin, health, prompts
+from app.api import chat, upload, admin, health, prompts, documents
 from app.modules.enhanced_session import EnhancedSessionModule
 from app.modules.document_processing import DocumentProcessor
 from app.modules.retrieval_rerank import RetrievalModule
@@ -113,6 +113,7 @@ async def lifespan(app: FastAPI):
         # 라우터에 의존성 주입
         chat.set_dependencies(rag_app.modules, rag_app.config)
         upload.set_dependencies(rag_app.modules, rag_app.config)
+        documents.set_dependencies(rag_app.modules, rag_app.config)
         admin.set_dependencies(rag_app.modules, rag_app.config)
         
         logger.info("✅ Application started successfully")
@@ -174,6 +175,7 @@ if static_path.exists():
 app.include_router(health.router, tags=["Health"])
 app.include_router(chat.router, prefix="/api", tags=["Chat"])
 app.include_router(upload.router, prefix="/api", tags=["Upload"])
+app.include_router(documents.router, prefix="/api", tags=["Documents"])
 app.include_router(admin.router, prefix="/api", tags=["Admin"])
 app.include_router(prompts.router, tags=["Prompts"])
 

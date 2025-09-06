@@ -967,3 +967,183 @@ Do not include any other text, explanation, or formatting. Only the JSON object.
         """캐시 클리어 (현재 구현에서는 통계만 업데이트)"""
         await self._update_collection_stats()
         logger.info("Retrieval cache cleared (stats updated)")
+    
+    async def get_collection_info(self) -> Dict[str, Any]:
+        """컬렉션 상세 정보 조회"""
+        try:
+            if not self.qdrant_client:
+                return {"size_mb": 0, "oldest_document": None, "newest_document": None}
+            
+            # 컬렉션 정보 조회
+            collection_info = await asyncio.to_thread(
+                self.qdrant_client.get_collection, self.collection_name
+            )
+            
+            # 컬렉션 크기 추정 (벡터 수 * 평균 벡터 크기)
+            vector_count = collection_info.vectors_count or 0
+            estimated_size_mb = vector_count * 768 * 4 / (1024 * 1024)  # float32 기준
+            
+            return {
+                "size_mb": round(estimated_size_mb, 2),
+                "oldest_document": None,  # 추후 구현 가능
+                "newest_document": None   # 추후 구현 가능
+            }
+            
+        except Exception as e:
+            logger.error(f"Failed to get collection info: {e}")
+            return {"size_mb": 0, "oldest_document": None, "newest_document": None}
+    
+    async def delete_all_documents(self) -> bool:
+        """
+        전체 문서 일괄 삭제 - Qdrant 컬렉션의 모든 벡터 삭제
+        
+        Returns:
+            bool: 컬렉션이 완전히 클리어되었는지 여부
+        """
+        try:
+            if not self.qdrant_client:
+                raise Exception("Qdrant client not initialized")
+            
+            logger.warning(f"Deleting all documents from collection: {self.collection_name}")
+            
+            # 방법 1: 컬렉션 재생성 (가장 확실한 방법)
+            # 현재 컬렉션 설정 조회
+            collection_info = await asyncio.to_thread(
+                self.qdrant_client.get_collection, self.collection_name
+            )
+            
+            # 컬렉션 삭제
+            await asyncio.to_thread(
+                self.qdrant_client.delete_collection, self.collection_name
+            )
+            
+            # 컬렉션 재생성
+            vector_config = collection_info.config.params.vectors
+            
+            # Dense 벡터 설정
+            dense_config = VectorParams(
+                size=vector_config["text"].size,
+                distance=Distance.COSINE
+            )
+            
+            vectors_config = {"text": dense_config}
+            
+            # Sparse 벡터 설정 (하이브리드 검색 활성화된 경우)
+            if self.hybrid_enabled:
+                from qdrant_client.models import SparseVectorParams
+                vectors_config["sparse"] = SparseVectorParams()
+            
+            # 새 컬렉션 생성
+            await asyncio.to_thread(
+                self.qdrant_client.create_collection,
+                collection_name=self.collection_name,
+                vectors_config=vectors_config
+            )
+            
+            # 통계 재설정
+            self.stats.update({
+                'total_documents': 0,
+                'vector_count': 0
+            })
+            
+            logger.info(f"Successfully deleted all documents and recreated collection: {self.collection_name}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to delete all documents: {e}")
+            
+            # 방법 2: Fallback - 모든 포인트 개별 삭제 시도
+            try:
+                logger.warning("Attempting fallback: deleting all points individually")
+                
+                # 모든 포인트 ID 조회
+                from qdrant_client.models import Filter
+                
+                search_results = await asyncio.to_thread(
+                    self.qdrant_client.scroll,
+                    collection_name=self.collection_name,
+                    limit=10000,  # 최대 10,000개씩
+                    with_payload=False,
+                    with_vectors=False
+                )
+                
+                points = search_results[0]
+                
+                if points:
+                    point_ids = [point.id for point in points]
+                    
+                    # 일괄 삭제
+                    await asyncio.to_thread(
+                        self.qdrant_client.delete,
+                        collection_name=self.collection_name,
+                        points_selector=point_ids
+                    )
+                    
+                    logger.info(f"Fallback deletion completed: {len(point_ids)} points deleted")
+                
+                # 통계 업데이트
+                await self._update_collection_stats()
+                
+                return True
+                
+            except Exception as fallback_error:
+                logger.error(f"Fallback deletion also failed: {fallback_error}")
+                raise Exception(f"All deletion methods failed. Original: {e}, Fallback: {fallback_error}")
+    
+    async def recreate_collection(self):
+        """컬렉션 재생성 (개발/디버그용)"""
+        try:
+            if not self.qdrant_client:
+                raise Exception("Qdrant client not initialized")
+            
+            logger.info(f"Recreating collection: {self.collection_name}")
+            
+            # 기존 컬렉션 삭제
+            try:
+                await asyncio.to_thread(
+                    self.qdrant_client.delete_collection, self.collection_name
+                )
+            except Exception:
+                logger.warning("Collection deletion failed or collection didn't exist")
+            
+            # 새 컬렉션 생성 (원래 설정 사용)
+            await self._init_collection()
+            
+            logger.info("Collection recreated successfully")
+            
+        except Exception as e:
+            logger.error(f"Failed to recreate collection: {e}")
+            raise
+    
+    async def backup_metadata(self) -> List[Dict[str, Any]]:
+        """문서 메타데이터 백업"""
+        try:
+            if not self.qdrant_client:
+                return []
+            
+            backup_data = []
+            
+            # 모든 포인트의 메타데이터 조회
+            search_results = await asyncio.to_thread(
+                self.qdrant_client.scroll,
+                collection_name=self.collection_name,
+                limit=10000,
+                with_payload=True,
+                with_vectors=False
+            )
+            
+            points = search_results[0]
+            
+            for point in points:
+                backup_data.append({
+                    "id": str(point.id),
+                    "payload": point.payload,
+                    "backup_timestamp": datetime.now().isoformat()
+                })
+            
+            logger.info(f"Metadata backup completed: {len(backup_data)} documents")
+            return backup_data
+            
+        except Exception as e:
+            logger.error(f"Failed to backup metadata: {e}")
+            return []
