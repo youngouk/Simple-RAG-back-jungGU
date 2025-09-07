@@ -125,6 +125,9 @@ reranking:
 session:
   ttl: 7200  # 2시간으로 연장 (기존 1시간 → 2시간)
   max_exchanges: 10  # 최대 교환 수도 증가 (5 → 10)
+  max_conversation_memory: 10  # 기억할 최근 대화 수
+  use_langchain_memory: true  # LangChain 메모리 사용
+  memory_type: "buffer"  # buffer, window, summary 중 선택
 
 logging:
   level: "DEBUG"

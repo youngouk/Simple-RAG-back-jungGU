@@ -1,6 +1,6 @@
 """
 Session management module
-세션 관리 및 컨텍스트 처리 모듈
+세션 관리 및 컨텍스트 처리 모듈 - LangChain ConversationBufferMemory 통합
 """
 import time
 import asyncio
@@ -9,18 +9,27 @@ from typing import Dict, Any, Optional, List
 from uuid import uuid4
 import json
 
+# LangChain 메모리 컴포넌트
+from langchain.memory import ConversationBufferMemory, ConversationBufferWindowMemory, ConversationSummaryMemory
+from langchain.schema import BaseMessage, HumanMessage, AIMessage
+
 from ..lib.logger import get_logger
 
 logger = get_logger(__name__)
 
 class SessionModule:
-    """세션 관리 모듈"""
+    """세션 관리 모듈 - LangChain 메모리 통합"""
     
     def __init__(self, config: Dict[str, Any]):
         self.config = config
         self.ttl = config.get('ttl', 3600)  # 기본 1시간
         self.max_context_length = config.get('max_context_length', 5)
         self.cleanup_interval = config.get('cleanup_interval', 300)  # 5분
+        
+        # LangChain 메모리 설정
+        self.use_langchain_memory = config.get('use_langchain_memory', True)
+        self.memory_type = config.get('memory_type', 'buffer')  # buffer, window, summary
+        self.max_conversation_memory = config.get('max_conversation_memory', 10)  # 기억할 대화 수
         
         # 인메모리 세션 저장소 (실제 운영에서는 Redis 사용)
         self.sessions: Dict[str, Dict[str, Any]] = {}
@@ -64,14 +73,33 @@ class SessionModule:
             logger.error(f"Session module destroy error: {e}")
     
     async def create_session(self, metadata: Dict[str, Any] = None) -> Dict[str, str]:
-        """새 세션 생성"""
+        """새 세션 생성 - LangChain 메모리 포함"""
         session_id = str(uuid4())
+        
+        # LangChain 메모리 인스턴스 생성
+        langchain_memory = None
+        if self.use_langchain_memory:
+            if self.memory_type == 'window':
+                langchain_memory = ConversationBufferWindowMemory(
+                    k=self.max_conversation_memory,
+                    return_messages=True
+                )
+            elif self.memory_type == 'summary':
+                # Summary memory는 LLM이 필요하므로 나중에 추가 가능
+                langchain_memory = ConversationBufferMemory(
+                    return_messages=True
+                )
+            else:  # 기본값: buffer
+                langchain_memory = ConversationBufferMemory(
+                    return_messages=True
+                )
         
         session_data = {
             'session_id': session_id,
             'created_at': time.time(),
             'last_accessed': time.time(),
-            'conversations': [],
+            'conversations': [],  # 기존 호환성 유지
+            'langchain_memory': langchain_memory,  # LangChain 메모리 추가
             'metadata': metadata or {},
             'context_summary': None
         }
@@ -80,7 +108,7 @@ class SessionModule:
         self.stats['total_sessions'] += 1
         self.stats['active_sessions'] += 1
         
-        logger.debug(f"Session created: {session_id}")
+        logger.debug(f"Session created with LangChain memory: {session_id}")
         
         return {'session_id': session_id}
     
@@ -125,13 +153,14 @@ class SessionModule:
     
     async def add_conversation(self, session_id: str, user_message: str, 
                              assistant_response: str, metadata: Dict[str, Any] = None):
-        """대화 추가"""
+        """대화 추가 - LangChain 메모리에도 저장"""
         session_result = await self.get_session(session_id)
         if not session_result['is_valid']:
             raise ValueError(f"Invalid session: {session_id}")
         
         session = session_result['session']
         
+        # 기존 방식 유지 (호환성)
         conversation = {
             'timestamp': time.time(),
             'user_message': user_message,
@@ -142,11 +171,23 @@ class SessionModule:
         session['conversations'].append(conversation)
         self.stats['total_conversations'] += 1
         
-        # 컨텍스트 길이 제한
-        if len(session['conversations']) > self.max_context_length:
+        # LangChain 메모리에 대화 추가
+        if self.use_langchain_memory and session.get('langchain_memory'):
+            try:
+                # LangChain 메모리에 대화 저장
+                session['langchain_memory'].save_context(
+                    {"input": user_message},
+                    {"output": assistant_response}
+                )
+                logger.debug(f"Conversation added to LangChain memory for session: {session_id}")
+            except Exception as e:
+                logger.error(f"Failed to add conversation to LangChain memory: {e}")
+        
+        # 컨텍스트 길이 제한 (기존 방식도 유지)
+        if len(session['conversations']) > self.max_conversation_memory:
             # 오래된 대화 제거하되, 요약 생성
-            old_conversations = session['conversations'][:-self.max_context_length]
-            session['conversations'] = session['conversations'][-self.max_context_length:]
+            old_conversations = session['conversations'][:-self.max_conversation_memory]
+            session['conversations'] = session['conversations'][-self.max_conversation_memory:]
             
             # 컨텍스트 요약 업데이트
             session['context_summary'] = await self._summarize_conversations(old_conversations)
@@ -154,20 +195,47 @@ class SessionModule:
         logger.debug(f"Conversation added to session: {session_id}")
     
     async def get_context_string(self, session_id: str) -> str:
-        """세션 컨텍스트 문자열 반환"""
+        """세션 컨텍스트 문자열 반환 - LangChain 메모리 우선 사용"""
         session_result = await self.get_session(session_id)
         if not session_result['is_valid']:
             return ""
         
         session = session_result['session']
+        
+        # LangChain 메모리에서 컨텍스트 가져오기
+        if self.use_langchain_memory and session.get('langchain_memory'):
+            try:
+                # LangChain 메모리에서 대화 기록 가져오기
+                messages = session['langchain_memory'].chat_memory.messages
+                
+                if messages:
+                    context_parts = []
+                    
+                    # 요약된 컨텍스트가 있으면 추가
+                    if session.get('context_summary'):
+                        context_parts.append(f"이전 대화 요약: {session['context_summary']}")
+                    
+                    # LangChain 메시지를 텍스트로 변환
+                    for msg in messages[-self.max_conversation_memory * 2:]:  # 사용자와 어시스턴트 메시지 쌍
+                        if isinstance(msg, HumanMessage):
+                            context_parts.append(f"사용자: {msg.content}")
+                        elif isinstance(msg, AIMessage):
+                            context_parts.append(f"어시스턴트: {msg.content}")
+                    
+                    return "\n".join(context_parts)
+            except Exception as e:
+                logger.error(f"Failed to get context from LangChain memory: {e}")
+        
+        # 폴백: 기존 방식 사용
         context_parts = []
         
         # 요약된 컨텍스트 추가
         if session.get('context_summary'):
             context_parts.append(f"이전 대화 요약: {session['context_summary']}")
         
-        # 최근 대화 추가
-        for conv in session['conversations'][-3:]:  # 최근 3개 대화만
+        # 최근 대화 추가 (설정된 개수만큼)
+        recent_count = min(self.max_conversation_memory, len(session['conversations']))
+        for conv in session['conversations'][-recent_count:]:
             context_parts.append(f"사용자: {conv['user_message']}")
             context_parts.append(f"어시스턴트: {conv['assistant_response']}")
         
