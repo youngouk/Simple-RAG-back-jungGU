@@ -48,6 +48,7 @@ class RetrievalModule:
         self.reranking_config = config.get('reranking', {})
         self.multi_query_config = config.get('multi_query', {})
         self.embeddings_config = config.get('embeddings', {})
+        self.sparse_embedding_config = config.get('sparse_embeddings', {})  # Sparse embedding 설정 추가
         
         # Qdrant 클라이언트
         self.qdrant_client = None
@@ -156,10 +157,9 @@ class RetrievalModule:
                 cache_dir="models/sparse"
             )
             
-            # 임시로 하이브리드를 비활성화하지만 임베더는 준비
-            # Qdrant API 호환성을 위해 단순한 구조로 시작
-            self.hybrid_enabled = False  # 나중에 활성화 예정
-            logger.info(f"Sparse embedder initialized but hybrid mode temporarily disabled: {model_id}")
+            # 하이브리드 모드 활성화
+            self.hybrid_enabled = True
+            logger.info(f"Sparse embedder initialized and hybrid mode enabled: {model_id}")
             
         except Exception as e:
             logger.warning(f"Failed to initialize sparse embedder: {e}")
@@ -182,20 +182,47 @@ class RetrievalModule:
                 )
                 dense_vector_size = len(test_embedding)
                 
-                # 벡터 설정 - 간단한 dense-only 구조로 시작
-                # 하이브리드 지원은 별도 작업으로 추가 예정
-                vectors_config = VectorParams(
-                    size=dense_vector_size,
-                    distance=Distance.COSINE
-                )
-                logger.info(f"Creating collection with dense vectors (size: {dense_vector_size})")
-                
-                # 컬렉션 생성
-                await asyncio.to_thread(
-                    self.qdrant_client.create_collection,
-                    collection_name=self.collection_name,
-                    vectors_config=vectors_config
-                )
+                # 하이브리드 벡터 설정 (Qdrant 문서 기준)
+                # Dense vectors: 기본 vectors 필드
+                # Sparse vectors: sparse_vectors 필드
+                if self.hybrid_enabled and self.sparse_embedder:
+                    # 하이브리드 모드: dense + sparse
+                    from qdrant_client.models import SparseVectorParams, SparseIndexParams
+                    
+                    vectors_config = VectorParams(
+                        size=dense_vector_size,
+                        distance=Distance.COSINE
+                    )
+                    
+                    sparse_vectors_config = {
+                        "keywords": SparseVectorParams(
+                            index=SparseIndexParams(
+                                on_disk=False
+                            )
+                        )
+                    }
+                    
+                    logger.info(f"Creating hybrid collection with dense (size: {dense_vector_size}) and sparse vectors")
+                    
+                    await asyncio.to_thread(
+                        self.qdrant_client.create_collection,
+                        collection_name=self.collection_name,
+                        vectors_config=vectors_config,
+                        sparse_vectors_config=sparse_vectors_config
+                    )
+                else:
+                    # Dense-only 모드
+                    vectors_config = VectorParams(
+                        size=dense_vector_size,
+                        distance=Distance.COSINE
+                    )
+                    logger.info(f"Creating collection with dense vectors only (size: {dense_vector_size})")
+                    
+                    await asyncio.to_thread(
+                        self.qdrant_client.create_collection,
+                        collection_name=self.collection_name,
+                        vectors_config=vectors_config
+                    )
                 
                 logger.info(f"Collection {self.collection_name} created successfully with dense vectors")
             else:
@@ -315,9 +342,22 @@ class RetrievalModule:
                 import uuid
                 point_id = str(uuid.uuid4())
                 
-                # 벡터 구성 - 현재 dense만 사용
-                # 하이브리드 모드가 비활성화된 상태이므로 dense만 사용
-                vectors = chunk['dense_embedding']  # 단순 dense 벡터로 설정
+                # 벡터 구성 - 하이브리드 모드 지원
+                if self.hybrid_enabled and 'sparse_embedding' in chunk:
+                    # 하이브리드 모드: dense + sparse
+                    # Qdrant 문서 기준: dense는 기본 vector, sparse는 named vector
+                    from qdrant_client.models import SparseVector
+                    
+                    vectors = {
+                        "": chunk['dense_embedding'],  # 기본 dense vector (unnamed)
+                        "keywords": SparseVector(
+                            indices=chunk['sparse_embedding']['indices'],
+                            values=chunk['sparse_embedding']['values']
+                        )
+                    }
+                else:
+                    # Dense-only 모드
+                    vectors = chunk['dense_embedding']
                 
                 points.append(PointStruct(
                     id=point_id,
@@ -435,12 +475,12 @@ class RetrievalModule:
                 prefetch=[
                     Prefetch(
                         query=NearestQuery(nearest=dense_embedding),
-                        using="dense",
+                        using="",  # Dense vector는 unnamed (기본)
                         limit=limit * 2
                     ),
                     Prefetch(
                         query=NearestQuery(nearest=sparse_vector),
-                        using="sparse", 
+                        using="keywords",  # Sparse vector는 "keywords"로 명명
                         limit=limit * 2
                     )
                 ],
@@ -501,9 +541,16 @@ class RetrievalModule:
             dense_results = await asyncio.to_thread(
                 self.qdrant_client.search,
                 collection_name=self.collection_name,
-                query_vector=("dense", dense_embedding),
+                query_vector=dense_embedding,  # Dense vector는 unnamed (기본)
                 limit=limit * 2,
                 with_payload=True
+            )
+            
+            # Sparse vector 생성
+            from qdrant_client.models import SparseVector
+            sparse_vector = SparseVector(
+                indices=sparse_embedding.indices.tolist(),
+                values=sparse_embedding.values.tolist()
             )
             
             sparse_results = await asyncio.to_thread(
@@ -543,7 +590,7 @@ class RetrievalModule:
             search_result = await asyncio.to_thread(
                 self.qdrant_client.search,
                 collection_name=self.collection_name,
-                query_vector=("dense", query_embedding),
+                query_vector=query_embedding,  # Dense vector는 unnamed (기본)
                 limit=limit * 3,  # 중복 제거를 고려하여 3배 더 가져옴
                 with_payload=True
             )

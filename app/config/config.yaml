@@ -24,6 +24,11 @@ embeddings:
   sparse_model: "Qdrant/bm42-all-minilm-l6-v2-attentions"
   batch_size: 100
 
+sparse_embeddings:
+  enabled: true
+  model: "Qdrant/bm42-all-minilm-l6-v2-attentions"
+  cache_dir: "models/sparse"
+
 llm:
   providers: ["google", "anthropic", "openai"]
   default_provider: "openai"  # 기본 모델 설정 (google, anthropic, openai 중 선택)
