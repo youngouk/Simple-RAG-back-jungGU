@@ -59,10 +59,28 @@ class DocumentProcessor:
     def _init_embedders(self):
         """Dense와 Sparse 임베딩 모델 초기화"""
         try:
-            # Dense embeddings (기존)
+            # Dense embeddings
             provider = self.embeddings_config.get('provider', 'google')
             
-            if provider == 'google':
+            if provider == 'gemini':
+                # Gemini Embedding 001 사용 (1536차원)
+                from .gemini_embeddings import GeminiEmbeddings
+                model_name = self.embeddings_config.get('model', 'models/gemini-embedding-001')
+                output_dimensionality = self.embeddings_config.get('output_dimensionality', 1536)
+                batch_size = self.embeddings_config.get('batch_size', 100)
+                # config.yaml의 llm.google.api_key에서 가져오기
+                api_key = self.config.get('llm', {}).get('google', {}).get('api_key')
+                
+                self.embedder = GeminiEmbeddings(
+                    google_api_key=api_key,
+                    model_name=model_name,
+                    output_dimensionality=output_dimensionality,
+                    batch_size=batch_size
+                )
+                logger.info(f"Gemini embeddings initialized with model: {model_name}, dimensions: {output_dimensionality}")
+                
+            elif provider == 'google':
+                # 기존 Google text-embedding-004 지원 유지 (호환성)
                 model_name = self.embeddings_config.get('model', 'text-embedding-004')
                 # config.yaml의 llm.google.api_key에서 가져오기
                 api_key = self.config.get('llm', {}).get('google', {}).get('api_key')
