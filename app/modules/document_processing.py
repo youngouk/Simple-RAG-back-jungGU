@@ -62,33 +62,30 @@ class DocumentProcessor:
             # Dense embeddings
             provider = self.embeddings_config.get('provider', 'google')
             
-            if provider == 'gemini':
-                # Gemini Embedding 001 사용 (1536차원)
-                from .gemini_embeddings import GeminiEmbeddings
-                model_name = self.embeddings_config.get('model', 'models/gemini-embedding-001')
-                output_dimensionality = self.embeddings_config.get('output_dimensionality', 1536)
-                batch_size = self.embeddings_config.get('batch_size', 100)
+            if provider == 'google':
+                model_name = self.embeddings_config.get('model', 'gemini-embedding-001')
+                output_dim = self.embeddings_config.get('output_dimensionality')
+                task_type = self.embeddings_config.get('task_type', 'RETRIEVAL_DOCUMENT')
                 # config.yaml의 llm.google.api_key에서 가져오기
                 api_key = self.config.get('llm', {}).get('google', {}).get('api_key')
                 
-                self.embedder = GeminiEmbeddings(
-                    google_api_key=api_key,
-                    model_name=model_name,
-                    output_dimensionality=output_dimensionality,
-                    batch_size=batch_size
-                )
-                logger.info(f"Gemini embeddings initialized with model: {model_name}, dimensions: {output_dimensionality}")
+                # GoogleGenerativeAIEmbeddings 초기화 설정
+                embedding_params = {
+                    'model': model_name,
+                    'google_api_key': api_key,
+                    'task_type': task_type
+                }
                 
-            elif provider == 'google':
-                # 기존 Google text-embedding-004 지원 유지 (호환성)
-                model_name = self.embeddings_config.get('model', 'text-embedding-004')
-                # config.yaml의 llm.google.api_key에서 가져오기
-                api_key = self.config.get('llm', {}).get('google', {}).get('api_key')
-                self.embedder = GoogleGenerativeAIEmbeddings(
-                    model=model_name,
-                    google_api_key=api_key
-                )
-                logger.info(f"Google embeddings initialized with model: {model_name}")
+                # output_dimensionality가 설정된 경우에만 추가
+                if output_dim:
+                    embedding_params['output_dimensionality'] = output_dim
+                
+                self.embedder = GoogleGenerativeAIEmbeddings(**embedding_params)
+                
+                if output_dim:
+                    logger.info(f"Google embeddings initialized: {model_name}, task_type: {task_type}, output_dim: {output_dim}")
+                else:
+                    logger.info(f"Google embeddings initialized: {model_name}, task_type: {task_type}")
             else:
                 raise ValueError(f"Unsupported embedding provider: {provider}")
             

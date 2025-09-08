@@ -19,9 +19,10 @@ qdrant:
     sparse_weight: 0.4
 
 embeddings:
-  provider: "gemini"  # google -> gemini로 변경
-  model: "models/gemini-embedding-001"  # text-embedding-004 -> gemini-embedding-001로 변경
-  output_dimensionality: 1536  # 출력 차원 명시
+  provider: "google"  # google로 통일
+  model: "gemini-embedding-001"  # 올바른 Gemini 임베딩 모델명  
+  output_dimensionality: 1536  # 1536 차원으로 설정
+  task_type: "RETRIEVAL_DOCUMENT"  # RAG 문서 검색용 최적화
   sparse_model: "Qdrant/bm42-all-minilm-l6-v2-attentions"
   batch_size: 100
 

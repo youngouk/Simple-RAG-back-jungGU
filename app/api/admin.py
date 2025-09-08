@@ -483,6 +483,43 @@ async def get_documents():
         logger.error(f"Documents error: {error}")
         raise HTTPException(status_code=500, detail="Failed to retrieve documents")
 
+@router.post("/admin/vector-db/recreate")
+async def recreate_vector_db():
+    """벡터 데이터베이스 재구성 (차원 변경 적용)"""
+    try:
+        retrieval_module = modules.get('retrieval')
+        if not retrieval_module:
+            raise HTTPException(status_code=503, detail="Retrieval module not available")
+        
+        # 기존 컬렉션 삭제
+        logger.info("벡터 데이터베이스 재구성을 시작합니다...")
+        collection_name = retrieval_module.collection_name
+        
+        try:
+            # 기존 컬렉션 삭제
+            await asyncio.to_thread(
+                retrieval_module.qdrant_client.delete_collection,
+                collection_name=collection_name
+            )
+            logger.info(f"기존 컬렉션 '{collection_name}' 삭제 완료")
+        except Exception as e:
+            logger.warning(f"기존 컬렉션 삭제 실패 (존재하지 않을 수 있음): {e}")
+        
+        # 새로운 컬렉션 생성 (업데이트된 차원으로)
+        await retrieval_module._init_collection()
+        logger.info(f"새 컬렉션 '{collection_name}' 생성 완료 (1536차원)")
+        
+        return {
+            "message": "벡터 데이터베이스가 성공적으로 재구성되었습니다",
+            "collection_name": collection_name,
+            "new_vector_dimension": 1536,
+            "timestamp": datetime.now().isoformat()
+        }
+        
+    except Exception as error:
+        logger.error(f"벡터 DB 재구성 오류: {error}")
+        raise HTTPException(status_code=500, detail=f"벡터 데이터베이스 재구성 실패: {str(error)}")
+
 @router.post("/admin/test")
 async def test_rag(request: dict):
     """RAG 시스템 테스트"""
