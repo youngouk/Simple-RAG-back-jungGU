@@ -12,7 +12,7 @@ qdrant:
   url: "${QDRANT_URL}"
   api_key: "${QDRANT_API_KEY:-}"
   collection_name: "documents"
-  vector_size: 1536  # 768 -> 1536 차원으로 변경
+  vector_size: 3072  # gemini-embedding-001의 3072 차원에 맞춤
   distance: "cosine"
   hybrid_search:
     dense_weight: 0.6
@@ -20,8 +20,8 @@ qdrant:
 
 embeddings:
   provider: "google"  # google로 통일
-  model: "gemini-embedding-001"  # 올바른 Gemini 임베딩 모델명  
-  output_dimensionality: 1536  # 1536 차원으로 설정
+  model: "models/gemini-embedding-001"  # 올바른 모델명 형식
+  output_dimensionality: 3072  # gemini-embedding-001의 실제 차원 수
   task_type: "RETRIEVAL_DOCUMENT"  # RAG 문서 검색용 최적화
   sparse_model: "Qdrant/bm42-all-minilm-l6-v2-attentions"
   batch_size: 100

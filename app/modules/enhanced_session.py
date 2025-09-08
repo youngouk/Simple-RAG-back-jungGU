@@ -90,9 +90,15 @@ class EnhancedSessionModule:
         except Exception as e:
             logger.error(f"Enhanced session module destroy error: {e}")
     
-    async def create_session(self, metadata: Dict[str, Any] = None) -> Dict[str, str]:
-        """새 세션 생성"""
-        session_id = str(uuid4())
+    async def create_session(self, metadata: Dict[str, Any] = None, session_id: str = None) -> Dict[str, str]:
+        """새 세션 생성 - 특정 ID 지정 가능"""
+        if session_id is None:
+            session_id = str(uuid4())
+        else:
+            # 세션 ID가 제공된 경우 기존 세션과 중복되지 않는지 확인
+            if session_id in self.sessions:
+                logger.warning(f"요청된 세션 ID가 이미 존재함: {session_id}, 새 ID로 대체")
+                session_id = str(uuid4())
         
         # LangChain memory 생성 (LLM이 있는 경우에만 ConversationSummaryBufferMemory 사용)
         if self.llm:

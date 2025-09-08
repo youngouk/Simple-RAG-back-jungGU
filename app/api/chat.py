@@ -158,9 +158,9 @@ async def handle_session(session_id: Optional[str], context: Dict[str, Any]) -> 
                 # 세션이 만료되거나 없을 때 사용자에게 알림
                 logger.info(f"새 세션 생성 중... (기존 세션: {session_id})")
         
-        # 새 세션 생성
+        # 새 세션 생성 - 사용자 제공 세션 ID 사용
         logger.debug(f"새 세션 생성 전 - 세션 모듈 ID: {id(session_module)}")
-        new_session = await session_module.create_session({"metadata": context})
+        new_session = await session_module.create_session({"metadata": context}, session_id=session_id)
         new_session_id = new_session["session_id"]
         
         logger.info(f"✅ 새 세션 생성 완료 - 생성된 session_id: {new_session_id}")
