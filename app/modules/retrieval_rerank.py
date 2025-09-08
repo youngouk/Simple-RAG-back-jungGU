@@ -82,6 +82,11 @@ class RetrievalModule:
             'hybrid_searches': 0,
             'query_expansions': 0
         }
+        
+        # 동시성 제어 및 상태 관리 (Race Condition 방지)
+        self._collection_lock = asyncio.Lock()  # 콜렉션 관리 동시성 제어
+        self._hybrid_compatibility_checked = False  # 하이브리드 호환성 체크 완료 플래그
+        self._collection_initialized = False  # 콜렉션 초기화 완료 플래그
     
     async def initialize(self):
         """모듈 초기화"""
@@ -242,6 +247,9 @@ class RetrievalModule:
             # 컬렉션 정보 업데이트
             await self._update_collection_stats()
             
+            # 컬렉션 초기화 완료 표시
+            self._collection_initialized = True
+            
         except Exception as e:
             logger.error(f"Collection initialization failed: {e}")
             raise
@@ -291,48 +299,151 @@ class RetrievalModule:
             logger.warning(f"Failed to update collection stats: {e}")
     
     async def _ensure_hybrid_collection_compatibility(self):
-        """하이브리드 벡터 지원을 위한 컬렉션 호환성 확인 및 재생성"""
+        """안전한 하이브리드 벡터 지원을 위한 컬렉션 호환성 확인 (Race Condition 방지)"""
+        # 이미 체크가 완료되었거나 하이브리드가 비활성화된 경우 스킵
+        if self._hybrid_compatibility_checked or not self.hybrid_enabled:
+            return
+        
+        # 동시성 제어: 하나의 프로세스만 호환성 체크를 수행
+        async with self._collection_lock:
+            # Double-check locking: lock을 획득한 후 다시 한 번 체크
+            if self._hybrid_compatibility_checked:
+                return
+            
+            try:
+                logger.info("안전한 하이브리드 호환성 체크 시작...")
+                
+                # 컬렉션 존재 여부 확인
+                collections = await asyncio.to_thread(
+                    self.qdrant_client.get_collections
+                )
+                collection_names = [col.name for col in collections.collections]
+                
+                if self.collection_name not in collection_names:
+                    logger.info(f"컬렉션 '{self.collection_name}'이 존재하지 않음. 하이브리드 지원 컬렉션으로 생성 중...")
+                    await self._init_collection()
+                    self._hybrid_compatibility_checked = True
+                    return
+                
+                # 컬렉션 정보 조회
+                collection_info = await asyncio.to_thread(
+                    self.qdrant_client.get_collection, self.collection_name
+                )
+                
+                # vectors_config에서 sparse 벡터 설정 확인
+                vectors_config = collection_info.config.params.vectors
+                needs_hybrid_support = False
+                
+                # sparse 벡터 지원 여부 확인
+                if isinstance(vectors_config, dict):
+                    if "sparse" not in vectors_config:
+                        needs_hybrid_support = True
+                        logger.info("기존 컬렉션에 sparse 벡터 지원이 없음")
+                else:
+                    # VectorParams 단일 객체인 경우 (dense only)
+                    needs_hybrid_support = True
+                    logger.info("기존 컬렉션이 단일 벡터 구성임 (dense only)")
+                
+                if needs_hybrid_support:
+                    # 기존 데이터 보존을 위한 안전한 마이그레이션
+                    await self._safe_migrate_to_hybrid_collection()
+                else:
+                    logger.info("컬렉션이 이미 하이브리드 벡터를 지원함")
+                
+                # 호환성 체크 완료 표시
+                self._hybrid_compatibility_checked = True
+                logger.info("하이브리드 호환성 체크 완료")
+                
+            except Exception as e:
+                logger.error(f"하이브리드 호환성 체크 실패: {e}")
+                # 오류 발생 시에도 체크 완료로 표시하여 무한 재시도 방지
+                self._hybrid_compatibility_checked = True
+                # sparse 임베딩을 비활성화하여 기존 기능 유지
+                logger.warning("하이브리드 기능을 임시 비활성화하여 기존 기능 유지")
+                self.hybrid_enabled = False
+    
+    async def _safe_migrate_to_hybrid_collection(self):
+        """기존 데이터를 보존하면서 하이브리드 지원 컬렉션으로 안전하게 마이그레이션"""
         try:
-            # 컬렉션 정보 조회
+            logger.info("기존 데이터 보존하며 하이브리드 컬렉션으로 마이그레이션 시작...")
+            
+            # 백업 컬렉션 이름 생성
+            backup_collection_name = f"{self.collection_name}_backup_{int(asyncio.get_event_loop().time())}"
+            
+            # 1. 기존 데이터 개수 확인
             collection_info = await asyncio.to_thread(
                 self.qdrant_client.get_collection, self.collection_name
             )
+            existing_count = collection_info.points_count
+            logger.info(f"기존 컬렉션에서 {existing_count}개의 포인트 발견")
             
-            # vectors_config에서 sparse 벡터 설정 확인
+            if existing_count == 0:
+                # 데이터가 없는 경우 단순히 컬렉션 재생성
+                logger.info("기존 데이터가 없으므로 단순 재생성 수행")
+                await asyncio.to_thread(
+                    self.qdrant_client.delete_collection, self.collection_name
+                )
+                await self._init_collection()
+                return
+            
+            # 2. 기존 컬렉션을 백업 이름으로 생성 (복사)
+            logger.info(f"기존 데이터를 '{backup_collection_name}'으로 백업 중...")
+            
+            # 기존 컬렉션과 동일한 구조로 백업 컬렉션 생성
             vectors_config = collection_info.config.params.vectors
+            await asyncio.to_thread(
+                self.qdrant_client.create_collection,
+                collection_name=backup_collection_name,
+                vectors_config=vectors_config
+            )
             
-            # sparse 벡터가 없으면 컬렉션 재생성
-            if isinstance(vectors_config, dict) and "sparse" not in vectors_config:
-                logger.warning("Existing collection doesn't support sparse vectors. Recreating collection with hybrid support...")
-                
-                # 기존 컬렉션 삭제
+            # 모든 포인트를 백업 컬렉션으로 복사
+            scroll_result = await asyncio.to_thread(
+                self.qdrant_client.scroll,
+                collection_name=self.collection_name,
+                limit=existing_count,
+                with_vectors=True,
+                with_payload=True
+            )
+            points = scroll_result[0]  # scroll returns (points, next_page_offset)
+            
+            if points:
                 await asyncio.to_thread(
-                    self.qdrant_client.delete_collection, self.collection_name
+                    self.qdrant_client.upsert,
+                    collection_name=backup_collection_name,
+                    points=points
                 )
-                
-                # 하이브리드 지원 컬렉션으로 재생성
-                await self._init_collection()
-                
-                logger.info("Collection recreated with hybrid vector support")
-                
-            elif not isinstance(vectors_config, dict) and self.hybrid_enabled:
-                # VectorParams 단일 객체인 경우 (dense only) 
-                logger.warning("Collection has single vector config, but hybrid mode is enabled. Recreating...")
-                
-                # 기존 컬렉션 삭제
-                await asyncio.to_thread(
-                    self.qdrant_client.delete_collection, self.collection_name
-                )
-                
-                # 하이브리드 지원 컬렉션으로 재생성
-                await self._init_collection()
-                
-                logger.info("Collection recreated with hybrid vector support")
-                
+                logger.info(f"{len(points)}개의 포인트를 백업 컬렉션에 복사 완료")
+            
+            # 3. 기존 컬렉션 삭제
+            logger.info("기존 컬렉션 삭제 중...")
+            await asyncio.to_thread(
+                self.qdrant_client.delete_collection, self.collection_name
+            )
+            
+            # 4. 하이브리드 지원 컬렉션 생성
+            logger.info("하이브리드 지원 컬렉션 재생성 중...")
+            await self._init_collection()
+            
+            # 5. 사용자에게 알림
+            if existing_count > 0:
+                logger.warning(f"마이그레이션 완료: 기존 {existing_count}개 문서는 '{backup_collection_name}' 컬렉션에 백업됨")
+                logger.warning("하이브리드 검색을 위해서는 문서를 다시 업로드해주세요.")
+                logger.info("백업 컬렉션은 기존 문서 검색 및 복원에 사용할 수 있습니다.")
+            
+            logger.info("하이브리드 컬렉션 마이그레이션 완료")
+            
         except Exception as e:
-            logger.error(f"Failed to ensure hybrid collection compatibility: {e}")
-            # 오류 발생시에도 업로드는 계속 시도 (sparse 벡터만 제외)
-            pass
+            logger.error(f"하이브리드 컬렉션 마이그레이션 실패: {e}")
+            # 백업 컬렉션 정리 (오류 발생 시)
+            try:
+                backup_collection_name = f"{self.collection_name}_backup_{int(asyncio.get_event_loop().time())}"
+                await asyncio.to_thread(
+                    self.qdrant_client.delete_collection, backup_collection_name
+                )
+            except:
+                pass
+            raise e
     
     async def add_documents(self, embedded_chunks: List[Dict[str, Any]]) -> bool:
         """문서 추가 (하이브리드 벡터 지원)"""

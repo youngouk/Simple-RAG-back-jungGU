@@ -1,0 +1,22 @@
+테스트 문서 2 - 머신러닝의 종류
+
+머신러닝(Machine Learning)은 데이터에서 패턴을 학습하여 예측이나 분류를 수행하는 AI의 핵심 기술입니다.
+
+머신러닝의 주요 유형:
+
+1. 지도학습(Supervised Learning)
+   - 훈련 데이터에 정답(레이블)이 포함되어 있음
+   - 예시: 분류(Classification), 회귀(Regression)
+   - 알고리즘: 선형회귀, 로지스틱 회귀, SVM, 랜덤 포레스트
+
+2. 비지도학습(Unsupervised Learning)
+   - 정답이 없는 데이터에서 숨겨진 패턴을 찾음
+   - 예시: 군집화(Clustering), 차원 축소(Dimensionality Reduction)
+   - 알고리즘: K-means, 계층 군집화, PCA
+
+3. 강화학습(Reinforcement Learning)
+   - 환경과의 상호작용을 통해 보상을 최대화하는 방법을 학습
+   - 예시: 게임 AI, 로봇 제어
+   - 알고리즘: Q-Learning, Deep Q-Network, Policy Gradient
+
+각 유형은 문제의 성격과 데이터의 특성에 따라 적절히 선택되어야 합니다.
