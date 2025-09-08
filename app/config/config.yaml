@@ -11,7 +11,7 @@ server:
 qdrant:
   url: "${QDRANT_URL}"
   api_key: "${QDRANT_API_KEY:-}"
-  collection_name: "documents"
+  collection_name: "documents-junggu"
   vector_size: 3072  # gemini-embedding-001의 3072 차원에 맞춤
   distance: "cosine"
   hybrid_search:
