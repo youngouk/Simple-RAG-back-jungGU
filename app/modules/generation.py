@@ -333,7 +333,7 @@ class GenerationModule:
             
             logger.debug(f"OpenAI model {model_name} using config: {list(generation_config.keys())}")
             
-            # 생성 실행 (30초 타임아웃)
+            # 생성 실행 (60초 타임아웃)
             response = await asyncio.wait_for(
                 asyncio.to_thread(
                     client.chat.completions.create,
@@ -341,7 +341,7 @@ class GenerationModule:
                     messages=messages,
                     **generation_config
                 ),
-                timeout=30.0
+                timeout=60.0
             )
             
             # 결과 추출
@@ -374,7 +374,7 @@ class GenerationModule:
             )
             
         except asyncio.TimeoutError:
-            logger.error("OpenAI 응답 시간이 30초를 초과했습니다")
+            logger.error("OpenAI 응답 시간이 60초를 초과했습니다")
             raise Exception("AI 응답 시간이 초과되었습니다. 잠시 후 다시 시도해주세요.")
         except Exception as e:
             logger.error(f"OpenAI generation error: {e}")

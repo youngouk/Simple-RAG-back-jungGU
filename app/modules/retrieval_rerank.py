@@ -22,6 +22,9 @@ from fastembed import SparseTextEmbedding
 import httpx
 from cohere import Client as CohereClient
 
+# Query expansion
+from .query_expansion import GPT5QueryExpansionEngine, ExpandedQuery
+
 from ..lib.logger import get_logger
 
 logger = get_logger(__name__)
@@ -66,13 +69,18 @@ class RetrievalModule:
         # 리랭킹 클라이언트들
         self.rerankers = {}
         
+        # 쿼리 확장 엔진
+        self.query_expansion_engine = None
+        self.query_expansion_enabled = self.multi_query_config.get('enable_query_expansion', False)
+        
         # 통계
         self.stats = {
             'total_searches': 0,
             'total_documents': 0,
             'vector_count': 0,
             'rerank_requests': 0,
-            'hybrid_searches': 0
+            'hybrid_searches': 0,
+            'query_expansions': 0
         }
     
     async def initialize(self):
@@ -92,7 +100,10 @@ class RetrievalModule:
             # 4. 리랭커 초기화
             await self._init_rerankers()
             
-            logger.info(f"Retrieval module initialized successfully (hybrid: {self.hybrid_enabled})")
+            # 5. 쿼리 확장 엔진 초기화 
+            await self._init_query_expansion()
+            
+            logger.info(f"Retrieval module initialized successfully (hybrid: {self.hybrid_enabled}, query_expansion: {self.query_expansion_enabled})")
             
         except Exception as e:
             logger.error(f"Retrieval module initialization failed: {e}")
@@ -413,28 +424,57 @@ class RetrievalModule:
             # 쿼리 전처리 - 한국어 검색 개선
             processed_query = self._preprocess_korean_query(query)
             
-            # 하이브리드 검색 사용 여부 결정 (스파스 임베더 사용 가능할 때만)
-            if self.hybrid_enabled and self.sparse_embedder:
-                # 하이브리드 검색 실행
-                results = await self._hybrid_search(processed_query, limit * 2, min_score)
-                self.stats['hybrid_searches'] += 1
-                logger.info(f"Hybrid search completed: {len(results)} results")
+            # 쿼리 확장 시도
+            expanded_query = await self.expand_query(processed_query)
+            queries_to_search = []
+            
+            if expanded_query:
+                # 확장된 쿼리들과 원본 쿼리 결합
+                queries_to_search = [processed_query]
+                for exp_q in expanded_query.expanded_queries[:3]:  # 최대 3개 추가 쿼리
+                    queries_to_search.append(exp_q['query'])
+                logger.info(f"Using multi-query search with {len(queries_to_search)} queries")
             else:
-                # Dense 검색만 실행
-                query_embedding = await asyncio.to_thread(
-                    self.embedder.embed_query, processed_query
-                )
-                results = await self._dense_search(query_embedding, limit=limit)
-                
-                # 점수 필터링
-                results = [
-                    result for result in results 
-                    if result.score >= min_score
-                ]
-                logger.info(f"Dense search completed: {len(results)} results (after filtering)")
+                # 확장 실패 시 원본 쿼리만 사용
+                queries_to_search = [processed_query]
+            
+            # 다중 쿼리 검색 결과 수집
+            all_results = []
+            
+            for search_query in queries_to_search:
+                try:
+                    if self.hybrid_enabled and self.sparse_embedder:
+                        # 하이브리드 검색 실행
+                        query_results = await self._hybrid_search(search_query, limit, min_score)
+                        self.stats['hybrid_searches'] += 1
+                    else:
+                        # Dense 검색만 실행
+                        query_embedding = await asyncio.to_thread(
+                            self.embedder.embed_query, search_query
+                        )
+                        query_results = await self._dense_search(query_embedding, limit=limit)
+                        
+                        # 점수 필터링
+                        query_results = [
+                            result for result in query_results 
+                            if result.score >= min_score
+                        ]
+                    
+                    all_results.extend(query_results)
+                    
+                except Exception as e:
+                    logger.warning(f"Search failed for query '{search_query[:30]}...': {e}")
+                    continue
+            
+            # 다중 쿼리 결과 융합 및 중복 제거
+            if expanded_query and len(queries_to_search) > 1:
+                final_results = self._fuse_multi_query_results(all_results, expanded_query)
+                logger.info(f"Multi-query fusion: {len(all_results)} -> {len(final_results)} results")
+            else:
+                final_results = all_results
             
             # 최종 결과 품질 검증
-            quality_results = self._validate_search_quality(query, results)
+            quality_results = self._validate_search_quality(query, final_results)
             
             logger.info(f"Search completed: {len(quality_results)} high-quality results returned")
             return quality_results[:limit]
@@ -817,7 +857,13 @@ Do not include any other text, explanation, or formatting. Only the JSON object.
             )
             
             # 응답 파싱
-            response_content = response.choices[0].message.content.strip()
+            response_content = response.choices[0].message.content
+            if not response_content:
+                logger.warning("GPT-5-nano returned empty response, using original results")
+                results.sort(key=lambda x: x.score, reverse=True)
+                return results[:top_k]
+            
+            response_content = response_content.strip()
             logger.info(f"GPT-5-nano raw response: {response_content}")  # 전체 응답 로깅
             
             # JSON 결과 추출 및 파싱
@@ -1303,3 +1349,85 @@ Do not include any other text, explanation, or formatting. Only the JSON object.
         except Exception as e:
             logger.error(f"Failed to backup metadata: {e}")
             return []
+    
+    async def _init_query_expansion(self):
+        """쿼리 확장 엔진 초기화"""
+        logger.info(f"🔍 Query expansion initialization starting... enabled: {self.query_expansion_enabled}")
+        logger.info(f"🔍 Multi query config: {self.multi_query_config}")
+        
+        if not self.query_expansion_enabled:
+            logger.info("❌ Query expansion disabled in configuration")
+            return
+        
+        try:
+            logger.info("🚀 Initializing GPT5QueryExpansionEngine...")
+            self.query_expansion_engine = GPT5QueryExpansionEngine(self.config)
+            logger.info("✅ Query expansion engine initialized successfully")
+        except Exception as e:
+            logger.error(f"❌ Query expansion engine initialization failed: {e}")
+            import traceback
+            logger.error(f"❌ Traceback: {traceback.format_exc()}")
+            self.query_expansion_enabled = False
+    
+    async def expand_query(self, query: str) -> Optional[ExpandedQuery]:
+        """쿼리를 확장하여 다중 쿼리를 생성"""
+        if not self.query_expansion_enabled or not self.query_expansion_engine:
+            return None
+        
+        try:
+            expanded = await self.query_expansion_engine.expand_query(query)
+            self.stats['query_expansions'] += 1
+            logger.info(f"Query expanded: {query} -> {len(expanded.expanded_queries)} queries")
+            return expanded
+        except Exception as e:
+            logger.error(f"Query expansion failed: {e}")
+            return None
+    
+    def _fuse_multi_query_results(self, all_results: List[SearchResult], expanded_query: ExpandedQuery) -> List[SearchResult]:
+        """다중 쿼리 결과를 융합하고 중복을 제거"""
+        try:
+            # ID별로 결과 그룹화 및 점수 융합
+            result_groups = {}
+            for result in all_results:
+                doc_id = result.id
+                if doc_id not in result_groups:
+                    result_groups[doc_id] = {
+                        'result': result,
+                        'scores': [],
+                        'queries': []
+                    }
+                result_groups[doc_id]['scores'].append(result.score)
+                result_groups[doc_id]['queries'].append(result.metadata.get('query', ''))
+            
+            # 융합된 결과 생성
+            fused_results = []
+            for doc_id, group in result_groups.items():
+                # 다양한 융합 전략 사용 가능 (평균, 최대값, RRF 등)
+                # 현재는 평균 점수 사용
+                avg_score = sum(group['scores']) / len(group['scores'])
+                max_score = max(group['scores'])
+                
+                # 쿼리 다양성에 따른 보너스 점수
+                diversity_bonus = len(set(group['queries'])) * 0.05
+                final_score = max_score + diversity_bonus
+                
+                result = group['result']
+                result.score = final_score
+                result.metadata['multi_query_count'] = len(group['scores'])
+                result.metadata['score_details'] = {
+                    'avg_score': avg_score,
+                    'max_score': max_score,
+                    'diversity_bonus': diversity_bonus
+                }
+                
+                fused_results.append(result)
+            
+            # 점수 기준으로 정렬
+            fused_results.sort(key=lambda x: x.score, reverse=True)
+            
+            return fused_results
+            
+        except Exception as e:
+            logger.error(f"Multi-query fusion failed: {e}")
+            # 융합 실패 시 원본 결과 반환
+            return all_results

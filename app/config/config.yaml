@@ -77,6 +77,14 @@ retrieval:
   max_sources: 25
   min_score: 0.15            # 기본 임계값 (동적 임계값 비활성화 시)
   top_k: 10
+
+# 다중 쿼리 확장 설정 (Multi-Query Expansion)
+multi_query:
+  enable_query_expansion: true     # 쿼리 확장 활성화 여부
+  expansion_model: "gpt-5-nano"    # 확장에 사용할 모델
+  max_expanded_queries: 3          # 최대 추가 쿼리 수
+  fusion_strategy: "rrf"           # 결과 융합 전략 (rrf, weighted_avg, max_score)
+  diversity_bonus: 0.05           # 쿼리 다양성 보너스 점수
   enable_reranking: true
   quality_threshold: 0.15
   deduplication_enabled: true
