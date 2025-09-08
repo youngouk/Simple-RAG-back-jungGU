@@ -123,11 +123,14 @@ def get_request_context(request: Request) -> Dict[str, Any]:
     }
 
 async def handle_session(session_id: Optional[str], context: Dict[str, Any]) -> Dict[str, Any]:
-    """세션 처리 - 개선된 버전"""
+    """세션 처리 - 개선된 버전 (세션 ID 불일치 방지 강화)"""
     try:
         session_module = modules.get('session')
         if not session_module:
             raise HTTPException(status_code=500, detail="Session module not available")
+        
+        # 요청된 session_id 로깅 (디버깅용)
+        logger.info(f"🔍 세션 요청 - 요청받은 session_id: {session_id}")
             
         if session_id:
             # 기존 세션 조회
@@ -136,12 +139,19 @@ async def handle_session(session_id: Optional[str], context: Dict[str, Any]) -> 
             session_result = await session_module.get_session(session_id, context)
             
             if session_result.get("is_valid"):
-                # 중요: 원래 요청된 session_id를 유지!
-                logger.info(f"✅ 세션 유효함: {session_id}")
+                # 중요: 원래 요청된 session_id를 반드시 유지!
+                logger.info(f"✅ 세션 유효함 - 요청 ID: {session_id}, 응답 ID: {session_id}")
+                
+                # 방어적 검증: 요청과 응답 ID가 일치하는지 확인
+                result_session_id = session_result.get('renewed_session_id', session_id)
+                if result_session_id != session_id:
+                    logger.error(f"🚨 세션 ID 불일치 감지! 요청: {session_id}, 응답: {result_session_id}")
+                
                 return {
                     "success": True,
-                    "session_id": session_id,  # 원본 session_id 사용
-                    "is_new": False
+                    "session_id": session_id,  # 무조건 원본 session_id 사용
+                    "is_new": False,
+                    "validation_result": session_result
                 }
             else:
                 logger.warning(f"세션 만료/없음: {session_id}, 이유: {session_result.get('reason', 'unknown')}")
@@ -153,7 +163,7 @@ async def handle_session(session_id: Optional[str], context: Dict[str, Any]) -> 
         new_session = await session_module.create_session({"metadata": context})
         new_session_id = new_session["session_id"]
         
-        logger.info(f"새 세션 생성 완료: {new_session_id}")
+        logger.info(f"✅ 새 세션 생성 완료 - 생성된 session_id: {new_session_id}")
         logger.debug(f"새 세션 생성 후 - 전체 세션 수: {len(session_module.sessions)}")
         logger.debug(f"새 세션 생성 후 - 세션 키 목록: {list(session_module.sessions.keys())}")
         
@@ -514,31 +524,58 @@ async def chat(request: Request, chat_request: ChatRequest):
     except HTTPException:
         raise
     except Exception as error:
-        logger.error("Chat API error", error=str(error))
+        logger.error("Chat API error", error=str(error), session_id=session_id)
         
         update_stats({"success": False})
         
-        # 사용자 친화적 오류 메시지 생성
+        # 구체적인 오류 분류 및 사용자 친화적 메시지 생성
         error_message = str(error)
-        if "응답 시간이 초과" in error_message:
+        error_type = "unknown"
+        user_message = "요청 처리 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요."
+        
+        if "응답 시간이 초과" in error_message or "timeout" in error_message.lower():
+            error_type = "timeout"
             user_message = "AI 응답 시간이 초과되었습니다. 잠시 후 다시 시도해주세요."
-        elif "API" in error_message.upper() or "KEY" in error_message.upper():
+        elif "API" in error_message.upper() or "KEY" in error_message.upper() or "credentials" in error_message.lower():
+            error_type = "api_auth"
             user_message = "AI 서비스 연결에 문제가 있습니다. 관리자에게 문의해주세요."
         elif "document" in error_message.lower() or "retrieval" in error_message.lower():
+            error_type = "retrieval"
             user_message = "문서 검색 중 오류가 발생했습니다. 질문을 다시 입력해주세요."
-        else:
-            user_message = "요청 처리 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요."
+        elif "session" in error_message.lower():
+            error_type = "session"
+            user_message = "세션 처리 중 오류가 발생했습니다. 새로고침 후 다시 시도해주세요."
+        elif "model" in error_message.lower() or "generation" in error_message.lower():
+            error_type = "generation" 
+            user_message = "AI 응답 생성 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요."
         
-        raise HTTPException(
-            status_code=500,
-            detail={
-                "error": "처리 오류",
-                "message": user_message,
-                "session_id": session_id,
-                "timestamp": datetime.now().isoformat(),
-                "support_message": "문제가 지속되면 관리자에게 문의해주세요."
+        # 에러 응답에 올바른 구조 보장
+        error_response = ChatResponse(
+            answer=user_message,
+            sources=[],
+            session_id=session_id or "unknown",  # session_id가 None인 경우 기본값 사용
+            processing_time=time.time() - start_time,
+            tokens_used=0,
+            timestamp=datetime.now().isoformat(),
+            model_info={
+                "provider": "error",
+                "model": "none",
+                "generation_time": 0,
+                "model_config": {
+                    "error_type": error_type,
+                    "error_handled": True
+                }
             }
         )
+        
+        # 로그에 상세한 에러 정보 기록
+        logger.error("Detailed error info", 
+                    error_type=error_type, 
+                    session_id=session_id,
+                    processing_time=time.time() - start_time,
+                    message_length=len(chat_request.message) if chat_request else 0)
+        
+        return error_response
 
 @router.post("/chat/session", response_model=SessionResponse)
 async def create_session(request: Request, session_request: SessionCreateRequest):
