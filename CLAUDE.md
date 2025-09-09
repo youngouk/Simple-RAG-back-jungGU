@@ -5,31 +5,33 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ### Python Backend Development (Primary)
-- **Start development server**: `cd backend && make dev`
-- **Start with auto-reload**: `cd backend && make dev-reload`
-- **Start production server**: `cd backend && make run`
-- **Setup development environment**: `cd backend && make setup`
+- **Start development server**: `make dev`
+- **Start with auto-reload**: `make dev-reload`
+- **Start production server**: `make run`
+- **Setup development environment**: `make setup`
 
 ### Development Workflow (UV + Makefile)
-- **Show all commands**: `cd backend && make help`
-- **Install dependencies**: `cd backend && make install-dev`
-- **Update dependencies**: `cd backend && make update`
-- **Sync with lock file**: `cd backend && make sync`
+- **Show all commands**: `make help`
+- **Install dependencies**: `make install-dev`
+- **Update dependencies**: `make update`
+- **Sync with lock file**: `make sync`
 
 ### Code Quality
-- **Lint code**: `cd backend && make lint`
-- **Fix linting issues**: `cd backend && make lint-fix`
-- **Format code**: `cd backend && make format`
-- **Type checking**: `cd backend && make type-check`
+- **Lint code**: `make lint`
+- **Fix linting issues**: `make lint-fix`
+- **Format code**: `make format`
+- **Type checking**: `make type-check`
 
 ### Testing
-- **Run tests**: `cd backend && make test`
-- **Run tests with coverage**: `cd backend && make test-cov`
+- **Run tests**: `make test`
+- **Run basic tests**: `make test-basic` (타임아웃 방지)
+- **Run tests with coverage**: `make test-cov`
+- **Test environment check**: `make test-env-check`
 
 ### Docker & Deployment
-- **Build Docker image**: `cd backend && make docker-build`
-- **Run Docker container**: `cd backend && make docker-run`
-- **Clean up**: `cd backend && make clean`
+- **Build Docker image**: `make docker-build`
+- **Run Docker container**: `make docker-run`
+- **Clean up**: `make clean`
 
 ### Frontend Development (Optional)
 - **Start web dashboard**: `cd web && npm run dev`
@@ -41,31 +43,32 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 This is a modular Korean RAG (Retrieval-Augmented Generation) chatbot system with a Python FastAPI backend and optional frontend components.
 
-### 1. Python FastAPI Backend (`/backend/`)
+### 1. Python FastAPI Backend (루트 디렉토리)
 - **Entry point**: `main.py` - FastAPI application with lifespan management
 - **API Layer** (`/app/api/`):
   - `chat.py` - Handles chat messages with session management
   - `upload.py` - Processes document uploads (PDF, TXT, Word, Excel, CSV)
+  - `documents.py` - Document management endpoints
   - `admin.py` - Admin endpoints for system management
   - `health.py` - Health checks and system stats
+  - `prompts.py` - Prompt management endpoints
 - **Module System** (`/app/modules/`):
   - `document_processing.py` - Document loading, splitting, and embedding
   - `retrieval_rerank.py` - Hybrid search (dense+sparse) and reranking
   - `generation.py` - Response generation using multi-LLM support
-  - `session.py` - Conversation context management
+  - `enhanced_session.py` - Enhanced conversation context management
+  - `gemini_embeddings.py` - Google Gemini embedding module
+  - `prompt_manager.py` - Dynamic prompt management
+  - `query_expansion.py` - Query expansion and enhancement
+  - `session.py` - Basic session management
 - **Configuration**: YAML-based configuration in `/app/config/`
+- **Libraries** (`/app/lib/`): 
+  - `config_loader.py` - Configuration loading and validation
+  - `logger.py` - Structured logging setup
+- **Models** (`/app/models/`):
+  - `prompts.py` - Prompt data models
 - **Vector Database**: Qdrant for storing and searching embeddings
 - **Package Management**: UV for ultra-fast dependency management
-
-### 2. React Web Dashboard (`/web/`)
-- Admin dashboard with tabs for chat, documents, stats, and uploads
-- Uses Material-UI components
-- TypeScript-based with Vite bundler
-
-### 3. Chat Widget (`/widget/`)
-- Embeddable chat widget for external websites
-- React + TypeScript with WebSocket support
-- Built as a standalone JavaScript file
 
 ## Key Technical Details
 
